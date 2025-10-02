@@ -22,7 +22,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from config import settings
 from pdf_usage_extractor import ExtractionRouter
 from pdf_usage_extractor.logging_utils import get_logger
-from pdf_usage_extractor.schemas import ExtractResponse, UsageRecord
+from pdf_usage_extractor.schemas import ExtractResponse, UsageRecord, ProcessorCreateRunRequest, ProcessorUpdateRequest, ProcessorInfo
 
 
 class PathRequest(BaseModel):
@@ -36,6 +36,14 @@ class JobCreate(BaseModel):
     provider_hint: Optional[str] = None
     debug: bool = False
     webhook_url: Optional[AnyHttpUrl] = None
+    
+    def is_cloud_path(self) -> bool:
+        """Check if input_path is a cloud storage URI."""
+        return self.input_path.startswith(('gs://', 's3://', 'azure://', 'http://', 'https://'))
+
+
+# Alias for Algorythmos compatibility
+ProcessorRunRequest = JobCreate
 
 
 class JobRecord(BaseModel):
@@ -151,6 +159,19 @@ async def _run_extraction(
         return router_engine.extract_path(path, provider_hint=provider_hint, debug=debug)
 
     try:
+        # Check if it's a cloud path
+        if path.startswith(('gs://', 's3://', 'azure://', 'http://', 'https://')):
+            # For cloud paths, we'd need to download first
+            # For now, return a placeholder response indicating cloud support
+            raise HTTPException(
+                status_code=status.HTTP_501_NOT_IMPLEMENTED,
+                detail={
+                    "code": "CLOUD_STORAGE_NOT_IMPLEMENTED", 
+                    "message": f"Cloud storage paths not yet supported: {path}",
+                    "supported_schemes": ["file://", "local paths"]
+                }
+            )
+        
         # Use anyio with timeout for graceful handling
         with anyio.move_on_after(timeout_sec) as cancel_scope:
             records, warnings = await anyio.to_thread.run_sync(_execute)
@@ -568,6 +589,124 @@ def build_api() -> FastAPI:
                 detail={"code": "JOB_NOT_FOUND", "message": "Job not found"}
             )
         return job.model_dump(mode="json")
+
+    # Algorythmos-style processor endpoints
+    @app.post("/processors/{processor_name}/runs")
+    async def create_processor_run(
+        processor_name: str,
+        request: Request,
+        payload: JobCreate,
+        background_tasks: BackgroundTasks,
+        tenant_ctx: Dict[str, str] = Depends(require_key),
+        x_api_version: Optional[str] = Header(default=None),
+    ) -> Dict[str, Any]:
+        """Create a processor run (Algorythmos-style endpoint)."""
+        # Log API version if provided
+        if x_api_version:
+            logger.info(
+                "API version requested",
+                extra={"context": {"version": x_api_version, "processor": processor_name}},
+            )
+
+        run_id = str(uuid4())
+        job_record = JobRecord(
+            job_id=run_id,
+            status="queued",
+            tenant_id=tenant_ctx["tenant"],
+            request_id=getattr(request.state, "request_id", None),
+            created_at=_utcnow(),
+            updated_at=_utcnow(),
+            webhook_url=payload.webhook_url,
+        )
+        _jobs[run_id] = job_record
+
+        background_tasks.add_task(_execute_job, run_id, payload, tenant_ctx["tenant"], job_record.request_id)
+
+        logger.info(
+            "Processor run queued",
+            extra={
+                "context": {
+                    "run_id": run_id,
+                    "processor": processor_name,
+                    "tenant_id": tenant_ctx["tenant"],
+                    "request_id": job_record.request_id,
+                    "api_version": x_api_version,
+                }
+            },
+        )
+        
+        # Return Algorythmos-compatible response
+        return {
+            "run_id": run_id,
+            "processor_name": processor_name,
+            "status": job_record.status,
+            "created_at": job_record.created_at.isoformat(),
+            "tenant_id": tenant_ctx["tenant"],
+        }
+
+    @app.get("/processors/{processor_name}/runs/{run_id}")
+    async def get_processor_run(
+        processor_name: str,
+        run_id: str,
+        tenant_ctx: Dict[str, str] = Depends(require_key),
+        x_api_version: Optional[str] = Header(default=None),
+    ) -> Dict[str, Any]:
+        """Get processor run status and results (Algorythmos-style endpoint)."""
+        job = _jobs.get(run_id)
+        if not job or job.tenant_id != tenant_ctx["tenant"]:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, 
+                detail={"code": "RUN_NOT_FOUND", "message": "Run not found"}
+            )
+        
+        # Return Algorythmos-compatible response format
+        response = {
+            "run_id": run_id,
+            "processor_name": processor_name,
+            "status": job.status,
+            "created_at": job.created_at.isoformat(),
+            "updated_at": job.updated_at.isoformat(),
+            "tenant_id": job.tenant_id,
+        }
+        
+        if job.result:
+            response["output"] = job.result.model_dump(mode="json")
+        if job.error:
+            response["error"] = job.error
+        if job.duration_sec:
+            response["duration_sec"] = job.duration_sec
+            
+        return response
+
+    @app.patch("/processors/{processor_name}")
+    async def update_processor(
+        processor_name: str,
+        request: Request,
+        payload: Dict[str, Any] = Body(...),
+        tenant_ctx: Dict[str, str] = Depends(require_key),
+        x_api_version: Optional[str] = Header(default=None),
+    ) -> Dict[str, Any]:
+        """Update processor configuration (Algorythmos-style endpoint)."""
+        logger.info(
+            "Processor update requested",
+            extra={
+                "context": {
+                    "processor": processor_name,
+                    "tenant_id": tenant_ctx["tenant"],
+                    "changes": list(payload.keys()),
+                    "api_version": x_api_version,
+                }
+            },
+        )
+        
+        # For now, return success - this would integrate with actual processor management
+        return {
+            "processor_name": processor_name,
+            "version": "1.0.0",
+            "updated_at": _utcnow().isoformat(),
+            "status": "active",
+            "configuration": payload,
+        }
 
     return app
 
