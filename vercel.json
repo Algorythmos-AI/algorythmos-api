@@ -1,4 +1,23 @@
 {
+  "functions": {
+    "api/index.py": {
+      "excludeFiles": [
+        "tests/**",
+        "files/**",
+        "**/__pycache__/**",
+        "**/*.pyc",
+        ".env*",
+        "README.md",
+        "Makefile",
+        "Dockerfile",
+        ".git/**",
+        "orange_internet_usage.csv",
+        "extract_orange_internet.py",
+        "service.py",
+        "main.py"
+      ]
+    }
+  },
   "rewrites": [
     {
       "source": "/(.*)",
