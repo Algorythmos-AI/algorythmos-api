@@ -1,0 +1,13 @@
+.venv
+__pycache__
+*.pyc
+dist
+build
+tests
+.vscode
+.idea
+.env
+uv.lock
+*.pdf
+*.png
+*.jpg
