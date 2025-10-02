@@ -7,7 +7,7 @@ name = "pdf-usage-extractor"
 version = "0.1.0"
 description = "FastAPI service for extracting internet usage data from telco PDFs"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.12"
 authors = [
     { name = "Sam Kalaliya" },
 ]
@@ -25,7 +25,6 @@ dependencies = [
     "pillow",
     "pydantic-settings",
     "pyarrow",
-    "vercel-asgi",
     "anyio",
 ]
 

@@ -13,7 +13,7 @@ from uuid import uuid4
 
 import anyio
 import httpx
-from fastapi import BackgroundTasks, Depends, FastAPI, File, Header, HTTPException, Request, UploadFile, status
+from fastapi import BackgroundTasks, Depends, FastAPI, File, Header, HTTPException, Request, Response, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.params import Body, Query
 from pydantic import AnyHttpUrl, BaseModel, ConfigDict
@@ -64,28 +64,6 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
         return response
 
 
-class APIKeyMiddleware(BaseHTTPMiddleware):
-    """Validate API key for protected endpoints."""
-    
-    # Public endpoints that don't require authentication
-    PUBLIC_PATHS = {"/api/alg/healthz", "/healthz", "/version"}
-    
-    async def dispatch(self, request: Request, call_next):  # type: ignore[override]
-        # Skip API key check for public endpoints
-        if request.url.path in self.PUBLIC_PATHS:
-            return await call_next(request)
-        
-        # Check API key for protected endpoints
-        api_key = request.headers.get("x-api-key")
-        if not api_key or api_key != settings.api_key:
-            return HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid or missing API key"
-            )
-        
-        return await call_next(request)
-
-
 class FileSizeMiddleware(BaseHTTPMiddleware):
     """Enforce maximum file size limits."""
     
@@ -93,9 +71,10 @@ class FileSizeMiddleware(BaseHTTPMiddleware):
         # Check content length header if available
         content_length = request.headers.get("content-length")
         if content_length and int(content_length) > settings.max_file_bytes:
-            return HTTPException(
+            return Response(
                 status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                detail={"code": "FILE_TOO_LARGE", "message": f"File exceeds {settings.max_file_mb} MB limit"}
+                content='{"code": "FILE_TOO_LARGE", "message": "File exceeds ' + str(settings.max_file_mb) + ' MB limit"}',
+                media_type="application/json"
             )
         
         return await call_next(request)

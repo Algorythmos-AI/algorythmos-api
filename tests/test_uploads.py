@@ -20,7 +20,7 @@ def client() -> Generator[TestClient, None, None]:
 @pytest.fixture
 def valid_api_key() -> str:
     """Get valid API key from environment or use default."""
-    return os.getenv("API_KEY", "test_api_key_123")
+    return os.getenv("API_KEY", "algo_dWukMWn8YyFfkdnL4yITRgp8042vYbz1ckk2aY3dv")
 
 
 @pytest.fixture
@@ -83,8 +83,8 @@ class TestUploadEndpoint:
         
         assert response.status_code == 400
         data = response.json()
-        assert "code" in data
-        assert data["code"] == "EMPTY_FILE"
+        assert "detail" in data
+        assert data["detail"]["code"] == "EMPTY_FILE"
 
     def test_upload_wrong_mimetype_error(self, client: TestClient, valid_api_key: str):
         """Test uploading non-PDF file returns 415."""
@@ -98,8 +98,8 @@ class TestUploadEndpoint:
         
         assert response.status_code == 415
         data = response.json()
-        assert "code" in data
-        assert data["code"] == "INVALID_CONTENT_TYPE"
+        assert "detail" in data
+        assert data["detail"]["code"] == "INVALID_CONTENT_TYPE"
 
     def test_upload_file_too_large_error(self, client: TestClient, valid_api_key: str):
         """Test uploading oversized file returns 413."""
@@ -159,8 +159,8 @@ class TestUploadEndpoint:
         
         assert response.status_code == 400
         data = response.json()
-        assert "code" in data
-        assert data["code"] == "MISSING_TENANT"
+        assert "detail" in data
+        assert data["detail"]["code"] == "MISSING_TENANT"
 
     def test_upload_non_pdf_extension_error(self, client: TestClient, valid_api_key: str):
         """Test uploading file without .pdf extension returns 415."""
@@ -174,8 +174,8 @@ class TestUploadEndpoint:
         
         assert response.status_code == 415
         data = response.json()
-        assert "code" in data
-        assert data["code"] == "NOT_PDF"
+        assert "detail" in data
+        assert data["detail"]["code"] == "NOT_PDF"
 
 
 class TestPathEndpoint:
@@ -193,8 +193,8 @@ class TestPathEndpoint:
         
         assert response.status_code == 400
         data = response.json()
-        assert "code" in data
-        assert data["code"] == "PATH_NOT_FOUND"
+        assert "detail" in data
+        assert data["detail"]["code"] == "PATH_NOT_FOUND"
 
 
 class TestJobEndpoints:
@@ -231,8 +231,8 @@ class TestJobEndpoints:
         
         assert response.status_code == 404
         data = response.json()
-        assert "code" in data
-        assert data["code"] == "JOB_NOT_FOUND"
+        assert "detail" in data
+        assert data["detail"]["code"] == "JOB_NOT_FOUND"
 
 
 class TestRateLimiting:
