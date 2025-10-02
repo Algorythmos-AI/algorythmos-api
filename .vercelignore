@@ -9,13 +9,11 @@ htmlcov/
 # Development tools
 .pre-commit-config.yaml
 Makefile
-.env
-.env.example
 
 # Documentation
 README.md
 
-# Data files that aren't needed at runtime
+# Data files that aren't needed at runtime  
 files/
 orange_internet_usage.csv
 extract_orange_internet.py
@@ -37,3 +35,7 @@ Dockerfile
 # UV/Python package management
 uv.lock
 pyproject.toml
+
+# Environment files (use Vercel env vars instead)
+.env
+.env.example
