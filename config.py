@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import List
 
-from pydantic import Field, AliasChoices
+from pydantic import Field, AliasChoices, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     
     # API Configuration with ALG_* aliases
     ALG_API_KEY: str = Field(
-        default="algo_dWukMWn8YyFfkdnL4yITRgp8042vYbz1ckk2aY3dv",  # Fallback for deployment
+        ...,  # Required - no fallback for production safety
         validation_alias=AliasChoices("ALG_API_KEY", "API_KEY", "api_key"),
         description="API key for authentication"
     )
@@ -68,6 +68,13 @@ class Settings(BaseSettings):
     s3_bucket: str = Field(default="", description="S3 bucket name")
     
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    
+    @model_validator(mode='after')
+    def validate_production_requirements(self) -> 'Settings':
+        """Validate production environment requirements."""
+        if self.ENV == "prod" and not self.ALG_API_KEY:
+            raise ValueError("ALG_API_KEY is required in production environment")
+        return self
     
     def get_cors_origins(self) -> List[str]:
         """Parse CORS origins from the configuration."""
