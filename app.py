@@ -81,7 +81,7 @@ class FileSizeMiddleware(BaseHTTPMiddleware):
         if content_length and int(content_length) > settings.max_file_bytes:
             return Response(
                 status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                content='{"code": "FILE_TOO_LARGE", "message": "File exceeds ' + str(settings.max_file_mb) + ' MB limit"}',
+                content='{"code": "FILE_TOO_LARGE", "message": "File exceeds ' + str(settings.MAX_FILE_MB) + ' MB limit"}',
                 media_type="application/json"
             )
         
@@ -101,7 +101,7 @@ def _utcnow() -> datetime:
 
 def _enforce_rate_limit(tenant_id: str) -> None:
     """Enforce rate limiting per tenant."""
-    rate = settings.rate_per_min
+    rate = settings.RATE_PER_MIN
     if rate <= 0:
         return
     
@@ -128,7 +128,7 @@ async def require_key(
     x_tenant_id: Optional[str] = Header(default=None),
 ) -> Dict[str, str]:
     """Validate API key and tenant ID."""
-    if x_api_key != settings.api_key:
+    if x_api_key != settings.ALG_API_KEY:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, 
             detail={"code": "UNAUTHORIZED", "message": "Invalid API key"}
@@ -324,11 +324,12 @@ def build_api() -> FastAPI:
     )
     
     # Add middleware in correct order (LIFO)
+    origins = settings.get_cors_origins()
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=settings.get_cors_origins(),
+        allow_origins=origins,
         allow_credentials=True,
-        allow_methods=["*"],
+        allow_methods=["GET", "POST", "PATCH", "OPTIONS"],
         allow_headers=["*"],
     )
     app.add_middleware(FileSizeMiddleware)
@@ -358,26 +359,30 @@ def build_api() -> FastAPI:
             extra={
                 "context": {
                     "versions": versions,
-                    "rate_per_min": settings.rate_per_min,
-                    "max_file_mb": settings.max_file_mb,
+                    "env": settings.ENV,
+                    "rate_per_min": settings.RATE_PER_MIN,
+                    "max_file_mb": settings.MAX_FILE_MB,
                     "cors_origins": settings.get_cors_origins(),
+                    "api_base": settings.API_BASE,
                 }
             },
         )
 
     # Health endpoint (public)
-    @app.get("/alg/healthz")
+    @app.get("/alg/healthz", tags=["health"])
     async def healthz() -> dict[str, str]:
         """Health check endpoint."""
         return {"status": "ok"}
 
     # Version endpoint (public) 
-    @app.get("/version")
+    @app.get("/version", tags=["health"])
     async def version() -> dict[str, str]:
-        """Get service version information."""
+        """Get service version and environment information."""
         try:
             from importlib import metadata
             response = {
+                "app": "api-algorythmos",
+                "env": settings.ENV,
                 "service": app.version,
                 "fastapi": metadata.version("fastapi"),
                 "pydantic": metadata.version("pydantic"),
@@ -388,7 +393,11 @@ def build_api() -> FastAPI:
                 response["pdf_usage_extractor"] = "0.0.0"
             return response
         except Exception:  # pragma: no cover - fallback if metadata unavailable
-            return {"service": app.version}
+            return {
+                "app": "api-algorythmos", 
+                "env": settings.ENV,
+                "service": app.version
+            }
 
     # File upload endpoint (protected)
     @app.post("/extract/upload", response_model=ExtractResponse)
@@ -451,7 +460,7 @@ def build_api() -> FastAPI:
                         status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, 
                         detail={
                             "code": "FILE_TOO_LARGE",
-                            "message": f"File exceeds {settings.max_file_mb} MB limit"
+                            "message": f"File exceeds {settings.MAX_FILE_MB} MB limit"
                         }
                     )
                 

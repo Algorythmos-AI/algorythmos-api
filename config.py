@@ -4,43 +4,96 @@ from __future__ import annotations
 
 from typing import List
 
-from pydantic import Field
-from pydantic_settings import BaseSettings
+from pydantic import Field, AliasChoices
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
     
-    # API Configuration
-    api_key: str = Field(..., description="API key for authentication")
-    cors_origins: str = Field(default="https://app.algorythmos.fr", description="CORS allowed origins (comma-separated)")
-    log_level: str = Field(default="INFO", description="Logging level")
+    # API Configuration with ALG_* aliases
+    ALG_API_KEY: str = Field(
+        ..., 
+        validation_alias=AliasChoices("ALG_API_KEY", "API_KEY", "api_key"),
+        description="API key for authentication"
+    )
+    ALG_TENANT_ID: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("ALG_TENANT_ID", "TENANT_ID"),
+        description="Default tenant ID"
+    )
+    RATE_PER_MIN: int = Field(
+        default=120, 
+        validation_alias=AliasChoices("RATE_PER_MIN", "ALG_RATE_PER_MIN", "rate_per_min"),
+        description="Rate limit per minute per tenant"
+    )
     
-    # Rate limiting and file size
-    rate_per_min: int = Field(default=120, description="Rate limit per minute per tenant")
-    max_file_mb: int = Field(default=25, description="Maximum file size in MB")
+    # New settings for Stage 1
+    API_BASE: str = Field(
+        default="https://api.algorythmos.fr",
+        description="Base API URL"
+    )
+    CORS_ORIGINS: str = Field(
+        default="http://localhost:3000,https://app.algorythmos.fr",
+        validation_alias=AliasChoices("CORS_ORIGINS", "cors_origins"),
+        description="CORS allowed origins (comma-separated)"
+    )
+    ENV: str = Field(
+        default="dev",
+        description="Environment (dev/staging/prod)"
+    )
+    VENDOR_WEBHOOK_SECRET: str | None = Field(
+        default=None,
+        description="Secret for vendor webhook HMAC verification"
+    )
     
-    # Optional S3 configuration
+    # File handling
+    MAX_FILE_MB: int = Field(
+        default=25,
+        validation_alias=AliasChoices("MAX_FILE_MB", "max_file_mb"),
+        description="Maximum file size in MB"
+    )
+    
+    # Logging
+    LOG_LEVEL: str = Field(
+        default="INFO",
+        validation_alias=AliasChoices("LOG_LEVEL", "log_level"),
+        description="Logging level"
+    )
+    
+    # Optional S3 configuration (legacy)
     s3_endpoint_url: str = Field(default="", description="S3 endpoint URL")
     s3_access_key_id: str = Field(default="", description="S3 access key ID")
     s3_secret_access_key: str = Field(default="", description="S3 secret access key")
     s3_bucket: str = Field(default="", description="S3 bucket name")
     
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        case_sensitive = False
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
     
     def get_cors_origins(self) -> List[str]:
         """Parse CORS origins from the configuration."""
-        if self.cors_origins.strip() == "*":
+        if self.CORS_ORIGINS.strip() == "*":
             return ["*"]
-        return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+        return [origin.strip() for origin in self.CORS_ORIGINS.split(",") if origin.strip()]
+    
+    @property
+    def api_key(self) -> str:
+        """Legacy property for backward compatibility."""
+        return self.ALG_API_KEY
+    
+    @property
+    def rate_per_min(self) -> int:
+        """Legacy property for backward compatibility."""
+        return self.RATE_PER_MIN
+    
+    @property
+    def max_file_mb(self) -> int:
+        """Legacy property for backward compatibility."""
+        return self.MAX_FILE_MB
     
     @property
     def max_file_bytes(self) -> int:
         """Get maximum file size in bytes."""
-        return self.max_file_mb * 1024 * 1024
+        return self.MAX_FILE_MB * 1024 * 1024
 
 
 # Global settings instance
