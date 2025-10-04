@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     
     # API Configuration with ALG_* aliases
     ALG_API_KEY: str = Field(
-        ..., 
+        default="algo_dWukMWn8YyFfkdnL4yITRgp8042vYbz1ckk2aY3dv",  # Fallback for deployment
         validation_alias=AliasChoices("ALG_API_KEY", "API_KEY", "api_key"),
         description="API key for authentication"
     )
