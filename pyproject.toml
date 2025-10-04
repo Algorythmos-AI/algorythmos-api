@@ -34,12 +34,14 @@ test = [
     "pytest-asyncio",
     "httpx",
     "pytest-cov",
+    "respx",
 ]
 dev = [
     "pytest",
     "pytest-asyncio",
     "pytest-cov",
     "httpx",
+    "respx",
     "uvicorn[standard]",
     "ruff",
     "black",
@@ -53,6 +55,7 @@ dev-dependencies = [
     "pytest-asyncio",
     "pytest-cov", 
     "httpx",
+    "respx",  # HTTP mocking for vendor client tests
     "uvicorn[standard]",
     "ruff",
     "black",
