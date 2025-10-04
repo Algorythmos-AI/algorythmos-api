@@ -323,7 +323,7 @@ def build_api() -> FastAPI:
         root_path="/api"  # For Vercel routing
     )
     
-    # Add middleware in correct order (LIFO)
+        # Add middleware in correct order (LIFO)
     origins = settings.get_cors_origins()
     app.add_middleware(
         CORSMiddleware,
@@ -331,7 +331,7 @@ def build_api() -> FastAPI:
         allow_credentials=True,
         allow_methods=["GET", "POST", "PATCH", "OPTIONS"],
         allow_headers=["Authorization", "Content-Type", "Idempotency-Key", "X-Request-ID", "*"],
-        expose_headers=["X-Request-ID"],  # So the browser can read request ID for debugging
+        expose_headers=["X-Request-ID"],  # So the browser can read it for debugging
     )
     app.add_middleware(FileSizeMiddleware)
     app.add_middleware(RequestContextMiddleware)
