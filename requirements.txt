@@ -8,3 +8,4 @@ python-dateutil==2.9.0.post0
 regex==2025.9.18
 pydantic-settings==2.10.1
 anyio==4.10.0
+respx==0.21.1

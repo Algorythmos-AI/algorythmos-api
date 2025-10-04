@@ -402,13 +402,14 @@ def build_api() -> FastAPI:
 
     # Vendor health endpoint (public) - for testing resilient client
     @app.get("/vendor/healthz", tags=["health"])
-    async def vendor_health() -> dict[str, str]:
+    async def vendor_health():
         """Test vendor service health with resilient client."""
-        return {
-            "vendor_status": "ok", 
-            "retry_logic": "Stage 2 implementation",
-            "note": "Resilient HTTP client patterns implemented"
-        }
+        try:
+            from vendor_libs.services.vendor import vendor_service
+            is_healthy = await vendor_service.vendor_health_check()
+            return Response(status_code=204 if is_healthy else 502)
+        except Exception:
+            return Response(status_code=502)
 
     # File upload endpoint (protected)
     @app.post("/extract/upload", response_model=ExtractResponse)
@@ -727,6 +728,16 @@ def build_api() -> FastAPI:
             "status": "active",
             "configuration": payload,
         }
+
+    # Shutdown handler for HTTP client cleanup
+    @app.on_event("shutdown")
+    async def shutdown_event():
+        """Clean up resources on shutdown."""
+        try:
+            from vendor_libs.utils.http import close_http_client
+            await close_http_client()
+        except Exception:
+            pass  # Don't fail shutdown on cleanup errors
 
     return app
 
