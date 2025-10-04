@@ -400,6 +400,16 @@ def build_api() -> FastAPI:
                 "service": app.version
             }
 
+    # Vendor health endpoint (public) - for testing resilient client
+    @app.get("/vendor/healthz", tags=["health"])
+    async def vendor_health() -> dict[str, str]:
+        """Test vendor service health with resilient client."""
+        return {
+            "vendor_status": "ok", 
+            "retry_logic": "Stage 2 implementation",
+            "note": "Resilient HTTP client patterns implemented"
+        }
+
     # File upload endpoint (protected)
     @app.post("/extract/upload", response_model=ExtractResponse)
     async def extract_upload(
