@@ -107,7 +107,6 @@ async def vendor_client() -> AsyncGenerator[httpx.AsyncClient, None]:
     
     if _client is None:
         _client = httpx.AsyncClient(
-            http2=True,
             timeout=httpx.Timeout(
                 connect=10.0,
                 read=10.0,
