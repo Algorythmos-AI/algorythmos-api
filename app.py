@@ -330,7 +330,7 @@ def build_api() -> FastAPI:
         allow_origins=origins,
         allow_credentials=True,
         allow_methods=["GET", "POST", "PATCH", "OPTIONS"],
-        allow_headers=["*"],
+        allow_headers=["Authorization", "Content-Type", "Idempotency-Key", "X-Request-ID", "*"],
     )
     app.add_middleware(FileSizeMiddleware)
     app.add_middleware(RequestContextMiddleware)
