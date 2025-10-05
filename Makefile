@@ -72,3 +72,35 @@ vercel-dev: ## Start Vercel development server
 
 vercel-deploy: ## Deploy to Vercel
 	vercel --prod
+
+stage2-gate: ## Start local server with /api root, run smokes, clean up
+	@chmod +x scripts/stage2_gate.sh
+	@./scripts/stage2_gate.sh
+
+stage3-gate: ## Start server, run Stage-3 tests, clean up
+	@chmod +x scripts/stage3_gate.sh
+	@./scripts/stage3_gate.sh
+
+stage4-gate: ## Start server, run Stage-4 tests, clean up
+	@chmod +x scripts/stage4_gate.sh
+	@./scripts/stage4_gate.sh
+
+gates: ## Run Stage 2 → 3 → 4 gates
+	@chmod +x scripts/all_gates.sh
+	@./scripts/all_gates.sh
+
+stage5-gate: ## Start server, run Stage-5 webhook security tests, clean up
+	@chmod +x scripts/stage5_gate.sh
+	@./scripts/stage5_gate.sh
+
+stage6a-gate: ## Start server, run Stage-6A DB tests, clean up
+	@chmod +x scripts/stage6a_gate.sh
+	@./scripts/stage6a_gate.sh
+
+stage6b-gate: ## Start server, run Stage-6B observability tests, clean up
+	@chmod +x scripts/stage6b_gate.sh
+	@./scripts/stage6b_gate.sh
+
+stage6c-gate: ## Start server, run Stage-6C OpenAPI tests, clean up
+	@chmod +x scripts/stage6c_gate.sh
+	@./scripts/stage6c_gate.sh

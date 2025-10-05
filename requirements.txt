@@ -9,3 +9,7 @@ regex==2025.9.18
 pydantic-settings==2.10.1
 anyio==4.10.0
 respx==0.21.1
+SQLAlchemy>=2.0
+alembic>=1.13
+aiosqlite>=0.19
+prometheus-client>=0.20
