@@ -34,11 +34,12 @@ class SchemaService:
         # Generate unique schema ID
         schema_id = f"{tenant_id}_{request.name.lower().replace(' ', '_')}_{int(time.time())}"
         
-        # Check for duplicate name within tenant
+        # Check for duplicate name within tenant (excluding soft-deleted)
         stmt = select(ExtractionSchemaDB).where(
             and_(
                 ExtractionSchemaDB.tenant_id == tenant_id,
-                ExtractionSchemaDB.name == request.name
+                ExtractionSchemaDB.name == request.name,
+                ExtractionSchemaDB.is_deleted == False
             )
         )
         result = await session.execute(stmt)
@@ -76,12 +77,13 @@ class SchemaService:
         tenant_id: str,
         schema_id: str,
     ) -> Optional[ExtractionSchema]:
-        """Get a schema by ID."""
+        """Get a schema by ID (excluding soft-deleted)."""
         
         stmt = select(ExtractionSchemaDB).where(
             and_(
                 ExtractionSchemaDB.id == schema_id,
-                ExtractionSchemaDB.tenant_id == tenant_id
+                ExtractionSchemaDB.tenant_id == tenant_id,
+                ExtractionSchemaDB.is_deleted == False
             )
         )
         result = await session.execute(stmt)
@@ -97,37 +99,30 @@ class SchemaService:
         session: AsyncSession,
         tenant_id: str,
         limit: int = 20,
-        cursor: Optional[str] = None,
-    ) -> SchemaListResponse:
-        """List schemas for a tenant with pagination."""
+        offset: int = 0,
+    ) -> Tuple[List[ExtractionSchema], int]:
+        """List schemas for a tenant with offset-based pagination."""
         
-        # Build base query
+        # Build base query (excluding soft-deleted)
         stmt = select(ExtractionSchemaDB).where(
-            ExtractionSchemaDB.tenant_id == tenant_id
+            and_(
+                ExtractionSchemaDB.tenant_id == tenant_id,
+                ExtractionSchemaDB.is_deleted == False
+            )
         )
         
-        # Apply cursor pagination if provided
-        if cursor:
-            try:
-                cursor_time = datetime.fromisoformat(cursor)
-                stmt = stmt.where(ExtractionSchemaDB.created_at < cursor_time)
-            except (ValueError, AttributeError):
-                pass  # Invalid cursor, ignore
-        
         # Order by created_at descending (newest first)
-        stmt = stmt.order_by(ExtractionSchemaDB.created_at.desc()).limit(limit + 1)
+        stmt = stmt.order_by(ExtractionSchemaDB.created_at.desc()).limit(limit).offset(offset)
         
         result = await session.execute(stmt)
         db_schemas = result.scalars().all()
         
-        # Check if there are more results
-        has_more = len(db_schemas) > limit
-        if has_more:
-            db_schemas = db_schemas[:limit]
-        
-        # Get total count
+        # Get total count (excluding soft-deleted)
         count_stmt = select(func.count()).select_from(ExtractionSchemaDB).where(
-            ExtractionSchemaDB.tenant_id == tenant_id
+            and_(
+                ExtractionSchemaDB.tenant_id == tenant_id,
+                ExtractionSchemaDB.is_deleted == False
+            )
         )
         total_result = await session.execute(count_stmt)
         total = total_result.scalar_one()
@@ -135,18 +130,7 @@ class SchemaService:
         # Convert to Pydantic models
         items = [SchemaService._db_to_pydantic(db_schema) for db_schema in db_schemas]
         
-        # Calculate next cursor
-        next_cursor = None
-        if has_more and items:
-            next_cursor = items[-1].created_at.isoformat()
-        
-        return SchemaListResponse(
-            items=items,
-            total=total,
-            limit=limit,
-            cursor=next_cursor,
-            has_more=has_more,
-        )
+        return items, total
     
     @staticmethod
     async def update_schema(
@@ -157,11 +141,12 @@ class SchemaService:
     ) -> Optional[ExtractionSchema]:
         """Update an existing schema."""
         
-        # Get existing schema
+        # Get existing schema (excluding soft-deleted)
         stmt = select(ExtractionSchemaDB).where(
             and_(
                 ExtractionSchemaDB.id == schema_id,
-                ExtractionSchemaDB.tenant_id == tenant_id
+                ExtractionSchemaDB.tenant_id == tenant_id,
+                ExtractionSchemaDB.is_deleted == False
             )
         )
         result = await session.execute(stmt)
@@ -172,12 +157,13 @@ class SchemaService:
         
         # Update fields
         if request.name is not None:
-            # Check for duplicate name
+            # Check for duplicate name (excluding soft-deleted and current schema)
             stmt = select(ExtractionSchemaDB).where(
                 and_(
                     ExtractionSchemaDB.tenant_id == tenant_id,
                     ExtractionSchemaDB.name == request.name,
-                    ExtractionSchemaDB.id != schema_id
+                    ExtractionSchemaDB.id != schema_id,
+                    ExtractionSchemaDB.is_deleted == False
                 )
             )
             result = await session.execute(stmt)
@@ -210,12 +196,13 @@ class SchemaService:
         tenant_id: str,
         schema_id: str,
     ) -> bool:
-        """Delete a schema."""
+        """Soft-delete a schema."""
         
         stmt = select(ExtractionSchemaDB).where(
             and_(
                 ExtractionSchemaDB.id == schema_id,
-                ExtractionSchemaDB.tenant_id == tenant_id
+                ExtractionSchemaDB.tenant_id == tenant_id,
+                ExtractionSchemaDB.is_deleted == False
             )
         )
         result = await session.execute(stmt)
@@ -224,7 +211,10 @@ class SchemaService:
         if not db_schema:
             return False
         
-        await session.delete(db_schema)
+        # Soft delete
+        db_schema.is_deleted = True
+        db_schema.updated_at = datetime.utcnow()
+        
         await session.commit()
         
         return True
