@@ -14,3 +14,5 @@ greenlet>=3.0
 alembic>=1.13
 aiosqlite>=0.19
 prometheus-client>=0.20
+pytest==8.3.3
+pytest-asyncio==0.24.0
