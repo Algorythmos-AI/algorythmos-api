@@ -140,6 +140,25 @@ class ClassifierConfig(BaseModel):
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
 
+class CreateClassifierRequest(BaseModel):
+    """Request to create a new classifier."""
+    
+    name: str = Field(..., min_length=1, max_length=100)
+    type: Literal["keyword", "ml", "llm", "rule_based"]
+    categories: List[str] = Field(..., min_items=1, description="Classification categories")
+    rules: Dict[str, Any] = Field(..., description="Classification rules configuration")
+    enabled: bool = Field(True)
+
+
+class UpdateClassifierRequest(BaseModel):
+    """Request to update a classifier."""
+    
+    name: Optional[str] = Field(None, min_length=1, max_length=100)
+    enabled: Optional[bool] = None
+    categories: Optional[List[str]] = Field(None, min_items=1)
+    rules: Optional[Dict[str, Any]] = None
+
+
 class ClassificationResult(BaseModel):
     """Result from document classification."""
     
@@ -160,6 +179,23 @@ class SplitterConfig(BaseModel):
     rules: Dict[str, Any]
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class CreateSplitterRequest(BaseModel):
+    """Request to create a new splitter."""
+    
+    name: str = Field(..., min_length=1, max_length=100)
+    type: Literal["page", "section", "pattern", "size"]
+    rules: Dict[str, Any] = Field(..., description="Splitter rules configuration")
+    enabled: bool = Field(True)
+
+
+class UpdateSplitterRequest(BaseModel):
+    """Request to update a splitter."""
+    
+    name: Optional[str] = Field(None, min_length=1, max_length=100)
+    enabled: Optional[bool] = None
+    rules: Optional[Dict[str, Any]] = None
 
 
 class DocumentChunk(BaseModel):
@@ -221,8 +257,12 @@ ExtractorConfig.model_rebuild()
 CreateExtractorRequest.model_rebuild()
 UpdateExtractorRequest.model_rebuild()
 ClassifierConfig.model_rebuild()
+CreateClassifierRequest.model_rebuild()
+UpdateClassifierRequest.model_rebuild()
 ClassificationResult.model_rebuild()
 SplitterConfig.model_rebuild()
+CreateSplitterRequest.model_rebuild()
+UpdateSplitterRequest.model_rebuild()
 DocumentChunk.model_rebuild()
 Citation.model_rebuild()
 ExtractedField.model_rebuild()
