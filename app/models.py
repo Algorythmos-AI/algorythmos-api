@@ -4,7 +4,7 @@ from sqlalchemy import DateTime, JSON, String, func, text
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.schema import Index
 
-from app.database import Base
+from database import Base
 
 
 class Run(Base):
