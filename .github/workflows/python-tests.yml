@@ -81,6 +81,13 @@ jobs:
         print('✅ Sprint 7 schemas validated')
         " || exit 0
     
+    - name: Security audit with pip-audit
+      run: |
+        source .venv/bin/activate
+        uv pip install pip-audit
+        pip-audit --desc || echo "⚠️  Security vulnerabilities detected - review required"
+      continue-on-error: true
+    
     - name: Lint with ruff (if available)
       run: |
         source .venv/bin/activate
