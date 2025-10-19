@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import tempfile
 import time
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock
@@ -30,7 +31,7 @@ from vendor_libs.utils.observability import metrics_app, runs_started, runs_succ
 from prometheus_client import Counter, Histogram
 
 # Database imports - use direct module references to avoid package conflicts
-from sqlalchemy import select, and_
+from sqlalchemy import select, and_, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 # These will be imported after app.database and app.models modules are available
@@ -446,38 +447,16 @@ def build_api() -> FastAPI:
         # Database modules not available - tests may provide mocks
         pass
     
-    app = FastAPI(
-        title="PDF Usage Extraction Service",
-        version="0.1.0",
-        description="Extract internet usage data from telecom PDF invoices",
-        root_path="/api"  # For Vercel routing
-    )
-    
-        # Add middleware in correct order (LIFO)
-    origins = settings.get_cors_origins()
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=origins,
-        allow_credentials=True,
-        allow_methods=["GET", "POST", "PATCH", "OPTIONS"],
-        allow_headers=["Authorization", "Content-Type", "Idempotency-Key", "X-Request-ID", "*"],
-        expose_headers=["X-Request-ID"],  # So the browser can read it for debugging
-    )
-    app.add_middleware(MetricsMiddleware)
-    app.add_middleware(FileSizeMiddleware)
-    app.add_middleware(RequestContextMiddleware)
-    
-    # Global router instance
-    global router_engine
-    router_engine = ExtractionRouter()
-    logger = get_logger()
-
-    @app.on_event("startup")
-    async def startup_event() -> None:
-        """Log service startup information and initialize database."""
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        """Manage application lifespan: startup and shutdown."""
+        # Startup
+        logger = get_logger()
+        
         # Initialize database tables
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
+        if engine is not None:
+            async with engine.begin() as conn:
+                await conn.run_sync(Base.metadata.create_all)
         
         versions = {
             "service": app.version,
@@ -498,11 +477,47 @@ def build_api() -> FastAPI:
                     "env": settings.ENV,
                     "rate_per_min": settings.RATE_PER_MIN,
                     "max_file_mb": settings.MAX_FILE_MB,
-                    "cors_origins": settings.get_cors_origins(),
-                    "api_base": settings.API_BASE,
+                    "database_configured": engine is not None,
                 }
             },
         )
+        
+        yield
+        
+        # Shutdown
+        try:
+            from vendor_libs.utils.http import close_http_client
+            await close_http_client()
+            logger.info("HTTP client closed successfully")
+        except Exception as e:
+            logger.warning(f"Error closing HTTP client: {e}")
+    
+    app = FastAPI(
+        title="PDF Usage Extraction Service",
+        version="0.1.0",
+        description="Extract internet usage data from telecom PDF invoices",
+        root_path="/api",  # For Vercel routing
+        lifespan=lifespan
+    )
+    
+        # Add middleware in correct order (LIFO)
+    origins = settings.get_cors_origins()
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=origins,
+        allow_credentials=True,
+        allow_methods=["GET", "POST", "PATCH", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type", "Idempotency-Key", "X-Request-ID", "*"],
+        expose_headers=["X-Request-ID"],  # So the browser can read it for debugging
+    )
+    app.add_middleware(MetricsMiddleware)
+    app.add_middleware(FileSizeMiddleware)
+    app.add_middleware(RequestContextMiddleware)
+    
+    # Global router instance and logger
+    global router_engine
+    router_engine = ExtractionRouter()
+    logger = get_logger()
 
     # Health endpoint (public)
     @app.get("/alg/healthz", tags=["health"])
@@ -553,12 +568,18 @@ def build_api() -> FastAPI:
         return await metrics_app()()
 
     # File upload endpoint (protected)
-    @app.post("/extract/upload", response_model=ExtractResponse)
+    @app.post(
+        "/extract/upload",
+        response_model=ExtractResponse,
+        tags=["extraction"],
+        summary="Extract from uploaded PDFs",
+        description="Upload one or more PDF files and extract telecom usage data. Supports multiple providers with automatic detection.",
+    )
     async def extract_upload(
         request: Request,
-        files: List[UploadFile] = File(...),
-        provider_hint: Optional[str] = Query(default=None),
-        debug: bool = Query(default=False),
+        files: List[UploadFile] = File(..., description="PDF files to process"),
+        provider_hint: Optional[str] = Query(default=None, description="Hint for telecom provider (e.g., 'orange')"),
+        debug: bool = Query(default=False, description="Enable debug mode with additional logging"),
         tenant_ctx: Dict[str, str] = Depends(require_key),
     ) -> ExtractResponse:
         """Extract usage data from uploaded PDF files."""
@@ -649,10 +670,16 @@ def build_api() -> FastAPI:
             return ExtractResponse(count=len(records), records=records, warnings=warnings)
 
     # Path extraction endpoint (protected)
-    @app.post("/extract/path", response_model=ExtractResponse)
+    @app.post(
+        "/extract/path",
+        response_model=ExtractResponse,
+        tags=["extraction"],
+        summary="Extract from file path",
+        description="Extract usage data from PDF files at a specified local or cloud storage path.",
+    )
     async def extract_path_endpoint(
         request: Request,
-        payload: PathRequest = Body(...),
+        payload: PathRequest = Body(..., description="Path configuration with input_path and optional provider_hint"),
         tenant_ctx: Dict[str, str] = Depends(require_key),
     ) -> ExtractResponse:
         """Extract usage data from files at the specified path."""
@@ -703,11 +730,16 @@ def build_api() -> FastAPI:
         return ExtractResponse(count=len(records), records=records, warnings=warnings)
 
     # Job creation endpoint (protected)
-    @app.post("/jobs")
+    @app.post(
+        "/jobs",
+        tags=["jobs"],
+        summary="Create background job",
+        description="Create an asynchronous background job for PDF processing. Supports webhook notifications on completion.",
+    )
     async def create_job(
         request: Request,
-        payload: JobCreate,
-        background_tasks: BackgroundTasks,
+        payload: JobCreate = Body(..., description="Job configuration including input_path and optional webhook_url"),
+        background_tasks: BackgroundTasks = None,
         tenant_ctx: Dict[str, str] = Depends(require_key),
     ) -> Dict[str, Any]:
         """Create a background job for processing."""
@@ -738,7 +770,12 @@ def build_api() -> FastAPI:
         return job_record.model_dump(mode="json")
 
     # Job status endpoint (protected)
-    @app.get("/jobs/{job_id}")
+    @app.get(
+        "/jobs/{job_id}",
+        tags=["jobs"],
+        summary="Get job status",
+        description="Retrieve the status and results of a background processing job.",
+    )
     async def get_job(
         job_id: str,
         tenant_ctx: Dict[str, str] = Depends(require_key),
@@ -753,18 +790,80 @@ def build_api() -> FastAPI:
         return job.model_dump(mode="json")
 
     # Algorythmos-style processor endpoints
-    @app.post("/processors/{processor_name}/runs")
+    @app.post(
+        "/processors/{processor_name}/runs",
+        tags=["processors"],
+        summary="Create processor run",
+        description="Start a new processing run for the specified processor. Accepts either file uploads (multipart/form-data) or JSON with input_path. Supports idempotency and webhook notifications.",
+        responses={
+            200: {"description": "Run created successfully"},
+            400: {"description": "Invalid request (too many files, file too large, invalid PDF, missing input)"},
+            413: {"description": "Request entity too large"},
+            415: {"description": "Unsupported media type"},
+            502: {"description": "Vendor service error"},
+        },
+    )
     async def create_processor_run(
         processor_name: str,
         request: Request,
         background_tasks: BackgroundTasks,
-        files: List[UploadFile] = File(...),
         tenant_ctx: Dict[str, str] = Depends(require_key),
-        x_api_version: Optional[str] = Header(default=None),
-        idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
+        x_api_version: Optional[str] = Header(default=None, description="API version for compatibility"),
+        idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key", description="Idempotency key for duplicate request prevention"),
         db: AsyncSession = Depends(get_session),
+        files: Optional[List[UploadFile]] = File(None, description="PDF files to process (max 50, max 10MB each)"),
     ) -> Dict[str, Any]:
-        """Create a processor run (Algorythmos-style endpoint)."""
+        """Create a processor run (Algorythmos-style endpoint). 
+        
+        Supports two modes:
+        1. File upload mode: multipart/form-data with files
+        2. Path reference mode: application/json with input_path
+        """
+        # Determine input mode and validate
+        content_type = request.headers.get("content-type", "")
+        is_json_mode = content_type.startswith("application/json")
+        is_multipart_mode = content_type.startswith("multipart/form-data")
+        
+        # Validate that exactly one input method is provided
+        if is_json_mode:
+            # Parse JSON body manually
+            try:
+                body_bytes = await request.body()
+                import json
+                body_dict = json.loads(body_bytes)
+                body = ProcessorCreateRunRequest(**body_dict)
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "code": "INVALID_JSON",
+                        "message": f"Invalid JSON body: {str(exc)}",
+                    }
+                )
+            input_path = body.input_path
+            # JSON mode: no files to validate
+            files_to_process = []
+        elif is_multipart_mode:
+            if not files:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "code": "MISSING_FILES",
+                        "message": "At least one file is required for multipart/form-data requests",
+                    }
+                )
+            # File upload mode
+            input_path = None
+            files_to_process = files
+        else:
+            raise HTTPException(
+                status_code=415,
+                detail={
+                    "code": "UNSUPPORTED_MEDIA_TYPE",
+                    "message": "Content-Type must be either application/json or multipart/form-data",
+                }
+            )
+        
         # Log API version if provided
         if x_api_version:
             logger.info(
@@ -774,8 +873,8 @@ def build_api() -> FastAPI:
 
         tenant_id = tenant_ctx["tenant"]
 
-        # Validate file count first (cheap check)
-        if len(files) > RUN_MAX_FILES:
+        # Validate file count for multipart mode
+        if files_to_process and len(files_to_process) > RUN_MAX_FILES:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={
@@ -864,60 +963,62 @@ def build_api() -> FastAPI:
             # No idempotency key, just generate a new run ID
             run_id = str(uuid4())
 
-        # Validate each file
-        file_data = []
-        for upload in files:
-            # Check content type
-            if upload.content_type not in {"application/pdf", "application/x-pdf", None}:
-                raise HTTPException(
-                    status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-                    detail={
-                        "code": "UNSUPPORTED_MEDIA_TYPE",
-                        "message": f"Unsupported content type: {upload.content_type}",
-                    }
-                )
-            
-            # Read content and validate size
-            content = await upload.read()
-            if len(content) > RUN_MAX_FILE_BYTES:
-                raise HTTPException(
-                    status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                    detail={
-                        "code": "FILE_TOO_LARGE",
-                        "message": f"File exceeds {RUN_MAX_FILE_BYTES} bytes limit",
-                    }
-                )
-            
-            # Validate PDF magic bytes
-            if not content.startswith(b"%PDF-"):
-                raise HTTPException(
-                    status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-                    detail={
-                        "code": "INVALID_PDF",
-                        "message": f"File is not a valid PDF: {upload.filename}",
-                    }
-                )
-            
-            # Create in-memory file for vendor upload
-            file_data.append({
-                "filename": upload.filename or "upload.pdf",
-                "content": content,
-                "content_type": upload.content_type or "application/pdf",
-            })
+        # Handle file upload mode: validate and upload files
+        if files_to_process:
+            file_data = []
+            for upload in files_to_process:
+                # Check content type
+                if upload.content_type not in {"application/pdf", "application/x-pdf", None}:
+                    raise HTTPException(
+                        status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+                        detail={
+                            "code": "UNSUPPORTED_MEDIA_TYPE",
+                            "message": f"Unsupported content type: {upload.content_type}",
+                        }
+                    )
+                
+                # Read content and validate size
+                content = await upload.read()
+                if len(content) > RUN_MAX_FILE_BYTES:
+                    raise HTTPException(
+                        status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                        detail={
+                            "code": "FILE_TOO_LARGE",
+                            "message": f"File exceeds {RUN_MAX_FILE_BYTES} bytes limit",
+                        }
+                    )
+                
+                # Validate PDF magic bytes
+                if not content.startswith(b"%PDF-"):
+                    raise HTTPException(
+                        status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+                        detail={
+                            "code": "INVALID_PDF",
+                            "message": f"File is not a valid PDF: {upload.filename}",
+                        }
+                    )
+                
+                # Create in-memory file for vendor upload
+                file_data.append({
+                    "filename": upload.filename or "upload.pdf",
+                    "content": content,
+                    "content_type": upload.content_type or "application/pdf",
+                })
 
-        # Upload files to vendor service
-        try:
-            # Pass file data directly to vendor (filename, content, content_type)
-            upload_result = await vendor.upload_files_stream(file_data)
-            input_path = upload_result.get("input_path", "mock://upload")
-        except Exception as exc:
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail={
-                    "code": "VENDOR_UPLOAD_FAILED",
-                    "message": f"Failed to upload files: {str(exc)}",
-                }
-            ) from exc
+            # Upload files to vendor service
+            try:
+                # Pass file data directly to vendor (filename, content, content_type)
+                upload_result = await vendor.upload_files_stream(file_data)
+                input_path = upload_result.get("input_path", "mock://upload")
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail={
+                        "code": "VENDOR_UPLOAD_FAILED",
+                        "message": f"Failed to upload files: {str(exc)}",
+                    }
+                ) from exc
+        # else: input_path already provided from JSON body
 
         # Create vendor job
         try:
@@ -968,7 +1069,8 @@ def build_api() -> FastAPI:
                     "tenant_id": tenant_id,
                     "request_id": getattr(request.state, "request_id", None),
                     "api_version": x_api_version,
-                    "file_count": len(file_data),
+                    "file_count": len(files_to_process) if files_to_process else 0,
+                    "input_mode": "multipart" if files_to_process else "json",
                     "vendor_job_id": vendor_job_id,
                 }
             },
@@ -989,12 +1091,21 @@ def build_api() -> FastAPI:
             "vendor_job_id": run.vendor_job_id,
         }
 
-    @app.get("/processors/{processor_name}/runs/{run_id}")
+    @app.get(
+        "/processors/{processor_name}/runs/{run_id}",
+        tags=["processors"],
+        summary="Get processor run details",
+        description="Retrieve status and results for a specific processor run by ID.",
+        responses={
+            200: {"description": "Run details retrieved successfully"},
+            404: {"description": "Run not found"},
+        },
+    )
     async def get_processor_run(
         processor_name: str,
         run_id: str,
         tenant_ctx: Dict[str, str] = Depends(require_key),
-        x_api_version: Optional[str] = Header(default=None),
+        x_api_version: Optional[str] = Header(default=None, description="API version for compatibility"),
         db: AsyncSession = Depends(get_session),
     ) -> Dict[str, Any]:
         """Get processor run status and results (Algorythmos-style endpoint)."""
@@ -1026,31 +1137,116 @@ def build_api() -> FastAPI:
             "vendor_job_id": run.vendor_job_id,
         }
 
-    @app.get("/processors/{processor_name}/runs")
+    @app.get(
+        "/processors/{processor_name}/runs",
+        tags=["processors"],
+        summary="List processor runs",
+        description="Retrieve a paginated list of runs for the specified processor. Returns items sorted by creation time (newest first). Supports cursor-based pagination and status filtering.",
+        responses={
+            200: {"description": "List of runs retrieved successfully"},
+            400: {"description": "Invalid status filter value"},
+        },
+    )
     async def list_processor_runs(
         processor_name: str,
         tenant_ctx: Dict[str, str] = Depends(require_key),
-        limit: int = Query(default=20, ge=1, le=100),
-        offset: int = Query(default=0, ge=0),
-        x_api_version: Optional[str] = Header(default=None),
+        limit: int = Query(default=20, ge=1, le=100, description="Maximum number of items to return (1-100)"),
+        cursor: Optional[str] = Query(default=None, description="Cursor for pagination (ISO timestamp)"),
+        status: Optional[str] = Query(default=None, description="Filter by status (queued, processing, succeeded, failed)"),
+        x_api_version: Optional[str] = Header(default=None, description="API version for compatibility"),
+        db: AsyncSession = Depends(get_session),
     ) -> Dict[str, Any]:
         """List processor runs with pagination (Algorythmos-style endpoint)."""
-        # For now, return empty list - will be implemented with database
-        # This is a placeholder to satisfy the API contract
-        return {
-            "items": [],
-            "total": 0,
-            "limit": limit,
-            "offset": offset,
-        }
+        tenant_id = tenant_ctx["tenant"]
+        
+        # Validate status filter
+        valid_statuses = {"queued", "processing", "succeeded", "failed"}
+        if status and status not in valid_statuses:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "code": "INVALID_STATUS",
+                    "message": f"Invalid status filter. Must be one of: {', '.join(valid_statuses)}",
+                },
+            )
+        
+        # Build base query with filters
+        conditions = [
+            Run.processor == processor_name,
+            Run.tenant_id == tenant_id,
+        ]
+        
+        if status:
+            conditions.append(Run.status == status)
+        
+        # Apply cursor for keyset pagination (cursor is created_at ISO timestamp)
+        if cursor:
+            try:
+                cursor_dt = datetime.fromisoformat(cursor.replace("Z", "+00:00"))
+                conditions.append(Run.created_at < cursor_dt)
+            except (ValueError, AttributeError):
+                # Invalid cursor format, ignore it
+                pass
+        
+        base_query = select(Run).where(and_(*conditions))
+        
+        # Get paginated results ordered by created_at DESC (newest first)
+        # Fetch limit + 1 to determine if there are more results
+        paginated_query = (
+            base_query
+            .order_by(Run.created_at.desc(), Run.id.desc())  # Secondary sort by ID for stability
+            .limit(limit + 1)
+        )
+        result = await db.execute(paginated_query)
+        runs = result.scalars().all()
+        
+        # Check if there are more results
+        has_more = len(runs) > limit
+        if has_more:
+            runs = runs[:limit]
+        
+        # Format response
+        items = [
+            {
+                "id": run.id,
+                "processor_name": run.processor,
+                "status": run.status,
+                "created_at": run.created_at.isoformat(),
+                "updated_at": run.updated_at.isoformat(),
+                "tenant_id": run.tenant_id,
+                "has_output": run.output is not None,
+                "has_error": run.error is not None,
+                "vendor_job_id": run.vendor_job_id,
+            }
+            for run in runs
+        ]
+        
+        # Build response with next_cursor if there are more results
+        response: Dict[str, Any] = {"items": items}
+        
+        if has_more and items:
+            # Use the created_at of the last item as the next cursor
+            next_cursor = items[-1]["created_at"]
+            response["next_cursor"] = next_cursor
+        
+        return response
 
-    @app.patch("/processors/{processor_name}")
+    @app.patch(
+        "/processors/{processor_name}",
+        tags=["processors"],
+        summary="Update processor configuration",
+        description="Update configuration settings for a specific processor. Configuration changes apply to future runs.",
+        responses={
+            200: {"description": "Processor configuration updated successfully"},
+            404: {"description": "Processor not found"},
+        },
+    )
     async def update_processor(
         processor_name: str,
         request: Request,
-        payload: Dict[str, Any] = Body(...),
+        payload: Dict[str, Any] = Body(..., description="Configuration updates to apply"),
         tenant_ctx: Dict[str, str] = Depends(require_key),
-        x_api_version: Optional[str] = Header(default=None),
+        x_api_version: Optional[str] = Header(default=None, description="API version for compatibility"),
     ) -> Dict[str, Any]:
         """Update processor configuration (Algorythmos-style endpoint)."""
         logger.info(
@@ -1075,12 +1271,24 @@ def build_api() -> FastAPI:
         }
 
     # Webhook endpoint for vendor callbacks
-    @app.post("/webhooks/vendor", status_code=204)
+    @app.post(
+        "/webhooks/vendor",
+        status_code=204,
+        tags=["webhooks"],
+        summary="Receive vendor webhook",
+        description="Accept webhook notifications from vendor service about job status updates. Validates HMAC SHA-256 signatures and updates run status in database.",
+        responses={
+            204: {"description": "Webhook processed successfully"},
+            400: {"description": "Invalid request body"},
+            401: {"description": "Invalid or missing signature"},
+            415: {"description": "Unsupported media type (expected application/json)"},
+        },
+    )
     async def receive_vendor_webhook(
         request: Request,
-        x_vendor_signature: Optional[str] = Header(default=None, alias="X-Vendor-Signature"),
-        x_vendor_event_id: Optional[str] = Header(default=None, alias="X-Vendor-Event-ID"),
-        x_vendor_timestamp: Optional[str] = Header(default=None, alias="X-Vendor-Timestamp"),
+        x_vendor_signature: Optional[str] = Header(default=None, alias="X-Vendor-Signature", description="HMAC SHA-256 signature of request body"),
+        x_vendor_event_id: Optional[str] = Header(default=None, alias="X-Vendor-Event-ID", description="Unique event identifier for deduplication"),
+        x_vendor_timestamp: Optional[str] = Header(default=None, alias="X-Vendor-Timestamp", description="Unix timestamp of webhook event"),
         db: AsyncSession = Depends(get_session),
     ) -> Response:
         """Receive webhook notifications from vendor service."""
@@ -1204,16 +1412,6 @@ def build_api() -> FastAPI:
         )
 
         return Response(status_code=204)
-
-    # Shutdown handler for HTTP client cleanup
-    @app.on_event("shutdown")
-    async def shutdown_event():
-        """Clean up resources on shutdown."""
-        try:
-            from vendor_libs.utils.http import close_http_client
-            await close_http_client()
-        except Exception:
-            pass  # Don't fail shutdown on cleanup errors
 
     return app
 
