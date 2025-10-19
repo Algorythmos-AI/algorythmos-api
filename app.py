@@ -30,6 +30,15 @@ from vendor_libs.utils.security import parse_signature_header, verify_hmac_sha25
 from vendor_libs.utils.observability import metrics_app, runs_started, runs_succeeded, runs_failed
 from prometheus_client import Counter, Histogram
 
+# Generic document processing imports
+from document_processing.schemas import (
+    CreateSchemaRequest,
+    UpdateSchemaRequest,
+    ExtractionSchema,
+    SchemaListResponse,
+)
+from document_processing.services.schema_service import SchemaService
+
 # Database imports - use direct module references to avoid package conflicts
 from sqlalchemy import select, and_, func
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -616,6 +625,195 @@ def build_api() -> FastAPI:
     async def metrics():
         """Expose Prometheus metrics."""
         return await metrics_app()()
+
+    # ==================== GENERIC DOCUMENT PROCESSING ENDPOINTS ====================
+    
+    # Schema Management Endpoints
+    @app.post(
+        "/schemas",
+        response_model=ExtractionSchema,
+        status_code=status.HTTP_201_CREATED,
+        tags=["schemas"],
+        summary="Create extraction schema",
+        description="Create a new custom extraction schema with field definitions. Schemas define what fields to extract from documents.",
+    )
+    async def create_schema(
+        request: Request,
+        payload: CreateSchemaRequest = Body(..., description="Schema configuration"),
+        tenant_ctx: Dict[str, str] = Depends(require_key),
+        session: AsyncSession = Depends(get_session),
+    ) -> ExtractionSchema:
+        """Create a new extraction schema."""
+        tenant_id = tenant_ctx["tenant_id"]
+        
+        try:
+            schema = await SchemaService.create_schema(
+                session=session,
+                tenant_id=tenant_id,
+                request=payload,
+            )
+            logger.info(
+                "Schema created",
+                extra={
+                    "context": {
+                        "schema_id": schema.schema_id,
+                        "schema_name": schema.name,
+                        "tenant_id": tenant_id,
+                        "field_count": len(schema.fields),
+                    }
+                }
+            )
+            return schema
+        except ValueError as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"code": "INVALID_SCHEMA", "message": str(e)}
+            )
+    
+    @app.get(
+        "/schemas",
+        response_model=SchemaListResponse,
+        tags=["schemas"],
+        summary="List extraction schemas",
+        description="Retrieve a paginated list of extraction schemas for the current tenant.",
+    )
+    async def list_schemas(
+        request: Request,
+        limit: int = Query(default=20, ge=1, le=100, description="Maximum number of items to return"),
+        cursor: Optional[str] = Query(default=None, description="Pagination cursor (ISO timestamp)"),
+        tenant_ctx: Dict[str, str] = Depends(require_key),
+        session: AsyncSession = Depends(get_session),
+    ) -> SchemaListResponse:
+        """List extraction schemas."""
+        tenant_id = tenant_ctx["tenant_id"]
+        
+        response = await SchemaService.list_schemas(
+            session=session,
+            tenant_id=tenant_id,
+            limit=limit,
+            cursor=cursor,
+        )
+        
+        return response
+    
+    @app.get(
+        "/schemas/{schema_id}",
+        response_model=ExtractionSchema,
+        tags=["schemas"],
+        summary="Get schema details",
+        description="Retrieve details of a specific extraction schema by ID.",
+    )
+    async def get_schema(
+        request: Request,
+        schema_id: str,
+        tenant_ctx: Dict[str, str] = Depends(require_key),
+        session: AsyncSession = Depends(get_session),
+    ) -> ExtractionSchema:
+        """Get schema by ID."""
+        tenant_id = tenant_ctx["tenant_id"]
+        
+        schema = await SchemaService.get_schema(
+            session=session,
+            tenant_id=tenant_id,
+            schema_id=schema_id,
+        )
+        
+        if not schema:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"code": "SCHEMA_NOT_FOUND", "message": f"Schema '{schema_id}' not found"}
+            )
+        
+        return schema
+    
+    @app.patch(
+        "/schemas/{schema_id}",
+        response_model=ExtractionSchema,
+        tags=["schemas"],
+        summary="Update schema",
+        description="Update an existing extraction schema. Field changes increment the schema version.",
+    )
+    async def update_schema(
+        request: Request,
+        schema_id: str,
+        payload: UpdateSchemaRequest = Body(..., description="Schema updates"),
+        tenant_ctx: Dict[str, str] = Depends(require_key),
+        session: AsyncSession = Depends(get_session),
+    ) -> ExtractionSchema:
+        """Update an existing schema."""
+        tenant_id = tenant_ctx["tenant_id"]
+        
+        try:
+            schema = await SchemaService.update_schema(
+                session=session,
+                tenant_id=tenant_id,
+                schema_id=schema_id,
+                request=payload,
+            )
+            
+            if not schema:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail={"code": "SCHEMA_NOT_FOUND", "message": f"Schema '{schema_id}' not found"}
+                )
+            
+            logger.info(
+                "Schema updated",
+                extra={
+                    "context": {
+                        "schema_id": schema.schema_id,
+                        "schema_name": schema.name,
+                        "version": schema.version,
+                        "tenant_id": tenant_id,
+                    }
+                }
+            )
+            return schema
+        except ValueError as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"code": "INVALID_SCHEMA", "message": str(e)}
+            )
+    
+    @app.delete(
+        "/schemas/{schema_id}",
+        status_code=status.HTTP_204_NO_CONTENT,
+        tags=["schemas"],
+        summary="Delete schema",
+        description="Delete an extraction schema. This operation cannot be undone.",
+    )
+    async def delete_schema(
+        request: Request,
+        schema_id: str,
+        tenant_ctx: Dict[str, str] = Depends(require_key),
+        session: AsyncSession = Depends(get_session),
+    ) -> Response:
+        """Delete a schema."""
+        tenant_id = tenant_ctx["tenant_id"]
+        
+        deleted = await SchemaService.delete_schema(
+            session=session,
+            tenant_id=tenant_id,
+            schema_id=schema_id,
+        )
+        
+        if not deleted:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"code": "SCHEMA_NOT_FOUND", "message": f"Schema '{schema_id}' not found"}
+            )
+        
+        logger.info(
+            "Schema deleted",
+            extra={
+                "context": {
+                    "schema_id": schema_id,
+                    "tenant_id": tenant_id,
+                }
+            }
+        )
+        
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     # File upload endpoint (protected)
     @app.post(
