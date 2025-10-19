@@ -58,7 +58,7 @@ class SchemaService:
             description=request.description,
             fields=fields_data,
             version=1,
-            metadata=request.metadata or {},
+            schema_metadata=request.metadata or {},
             created_at=datetime.utcnow(),
             updated_at=datetime.utcnow(),
         )
@@ -195,7 +195,7 @@ class SchemaService:
             db_schema.version += 1
         
         if request.metadata is not None:
-            db_schema.metadata = request.metadata
+            db_schema.schema_metadata = request.metadata
         
         db_schema.updated_at = datetime.utcnow()
         
@@ -245,5 +245,5 @@ class SchemaService:
             tenant_id=db_schema.tenant_id,
             created_at=db_schema.created_at,
             updated_at=db_schema.updated_at,
-            metadata=db_schema.metadata,
+            metadata=db_schema.schema_metadata,
         )

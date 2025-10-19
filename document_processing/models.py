@@ -5,7 +5,7 @@ from datetime import datetime
 from sqlalchemy import Boolean, Column, DateTime, Integer, JSON, String, Text
 from sqlalchemy.sql import func
 
-from app.database import Base
+from app.models import Base
 
 
 class ExtractionSchemaDB(Base):
@@ -19,7 +19,7 @@ class ExtractionSchemaDB(Base):
     description = Column(String(500), nullable=False)
     fields = Column(JSON, nullable=False)  # List of FieldDefinition dicts
     version = Column(Integer, nullable=False, default=1)
-    metadata = Column(JSON, nullable=True)
+    schema_metadata = Column(JSON, nullable=True)  # Renamed from 'metadata' to avoid SQLAlchemy reserved word
     created_at = Column(DateTime, nullable=False, default=func.now())
     updated_at = Column(DateTime, nullable=False, default=func.now(), onupdate=func.now())
     
@@ -97,7 +97,7 @@ class DocumentChunkDB(Base):
     content_type = Column(String(100), nullable=False, default="application/pdf")
     content_size = Column(Integer, nullable=False)
     storage_path = Column(String, nullable=True)  # If content stored externally
-    metadata = Column(JSON, nullable=True)
+    chunk_metadata = Column(JSON, nullable=True)  # Renamed from 'metadata'
     created_at = Column(DateTime, nullable=False, default=func.now())
     
     def __repr__(self) -> str:
