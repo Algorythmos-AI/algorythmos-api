@@ -163,7 +163,7 @@ curl -X GET "http://localhost:8000/api/jobs/{job_id}" \
 
 ### Idempotency
 
-All processor run endpoints support idempotency to prevent duplicate processing:
+All processor run endpoints support idempotency to prevent duplicate processing:-
 
 ```bash
 # Same idempotency key = same run ID (safe retries)
