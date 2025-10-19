@@ -20,12 +20,22 @@ class Run(Base):
     error: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     vendor_job_id: Mapped[str | None] = mapped_column(String, unique=True, nullable=True)
     idempotency_key: Mapped[str | None] = mapped_column(String, nullable=True)
+    
+    # Sprint 5: Version tracking
+    processor_version_id: Mapped[str | None] = mapped_column(String, index=True, nullable=True)
+    version_number: Mapped[int | None] = mapped_column(nullable=True)
+    api_version: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    file_id: Mapped[str | None] = mapped_column(String, index=True, nullable=True)
+    
+    # Timestamps
     created_at: Mapped[str] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
     updated_at: Mapped[str] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
+    started_at: Mapped[str | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[str | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     __table_args__ = (
         Index(
