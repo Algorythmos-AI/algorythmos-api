@@ -35,7 +35,8 @@
 |------------|--------|-------------------|----------------|----------|---------|
 | **FILES** | 🟡 Partial | POST /files, GET /files, GET /files/{id}, DELETE /files/{id} | - Missing upload from URL/base64<br>- Missing multi-format support (HEIC, HEIF, Office docs)<br>- No file type detection/normalization<br>- Limited to basic file storage | P0 | Implement multi-format intake |
 | **PARSE** | 🟡 Partial | POST /parse, POST /parse/async, GET /parse/{run_id} | - No `target` parameter (json default)<br>- No `pageRanges` support<br>- No `agenticOcr`/`pageRotation` toggles<br>- No chunks/blocks/bbox structure<br>- No page dimensions<br>- No version header enforcement | P0 | Implement Extend Parse API spec |
-| **PROCESSORS** | 🟢 Implemented | POST /processors, GET /processors, GET /processors/{id}, PUT /processors/{id}, DELETE /processors/{id} | - No `/processor_versions` endpoints<br>- No version publish workflow<br>- No version list/get<br>- No version header tracking | P0 | Add processor versions CRUD |
+| **PROCESSORS** | 🟢 Implemented | POST /processors, GET /processors, GET /processors/{id}, PUT /processors/{id}, DELETE /processors/{id} | ✅ Processor CRUD complete | ✅ | N/A |
+| **PROCESSOR VERSIONS** | 🟢 Implemented | POST /processor_versions, POST /processor_versions/{id}:publish, GET /processor_versions/{id}, GET /processors/{id}/versions | ✅ Version lifecycle complete | ✅ | Sprint 4 complete |
 | **PROCESSOR RUNS** | 🔴 Missing | None | - No POST /processor_runs<br>- No GET /processor_runs/{id}<br>- No GET /processor_runs (list)<br>- No POST /{id}:cancel<br>- No DELETE /{id}<br>- No data/citations/confidence output<br>- No usage metrics | P0 | Implement processor runs endpoints |
 | **WORKFLOWS** | 🟡 Partial | POST /workflows, GET /workflows, GET /workflows/{id}, PUT /workflows/{id}, DELETE /workflows/{id}, POST /workflows/{id}/execute | - No `/workflow_runs` separate resource<br>- No POST /workflow_runs<br>- No GET /workflow_runs/{id}<br>- No POST /{id}:cancel<br>- No POST /{id}:correct (corrections)<br>- No version header tracking | P0 | Separate workflow runs + correct endpoint |
 | **EVALUATION SETS** | 🟢 Implemented | POST /evaluation-sets, GET /evaluation-sets, GET /evaluation-sets/{id}, PUT /evaluation-sets/{id}, DELETE /evaluation-sets/{id}, POST /evaluation-sets/{id}/run | - No `/eval_items` CRUD<br>- No `/eval_items:bulk` endpoint<br>- Naming: use `eval_sets` vs `evaluation-sets` | P1 | Add eval_items + bulk creation |
@@ -122,6 +123,36 @@
 
 ---
 
+## ✅ Sprint 4 COMPLETE (P3.1-P3.2)
+
+**Completed:**
+- ✅ P3.1: Processor versions table and migration
+- ✅ P3.2: Version lifecycle (create → publish → deprecate)
+- ✅ POST /processor_versions (create from processor)
+- ✅ POST /processor_versions/{id}:publish (publish + optional make_default)
+- ✅ GET /processor_versions/{id} (get version details)
+- ✅ GET /processors/{id}/versions (list all versions)
+- ✅ Sequential version numbering per processor
+- ✅ Default version management (one per processor)
+- ✅ Status transitions: draft → published → deprecated
+- ✅ Configuration snapshots independent of source
+- ✅ Change tracking (change_notes, created_by)
+- ✅ 28 comprehensive version tests created
+- ✅ Service logic verified
+
+**Features Delivered:**
+- Version ID format: pver_{12_char_hex}
+- Draft editing before publish
+- Immutable published versions
+- Default fallback to latest published
+- Field overrides on version creation
+- Pagination and status filtering
+- Compound indexes for performance
+
+**Commit SHA:** (See Sprint 4 commit)
+
+---
+
 ## Priority 0 (P0) - Critical Gaps
 
 ### ~~1. VERSION HEADER SYSTEM~~ ✅ COMPLETE (Sprint 1)
@@ -164,17 +195,17 @@
 
 **Action:** ~~Reimplement parse endpoint to match Extend schema~~ **COMPLETE**
 
-### 5. PROCESSOR VERSIONS (Sprint 4 - NEXT)
+### ~~5. PROCESSOR VERSIONS~~ ✅ COMPLETE (Sprint 4)
 **Missing:**
-- POST /processor_versions (create version)
-- POST /processor_versions/{id}:publish (publish version)
-- GET /processor_versions/{id} (get version)
-- GET /processors/{id}/versions (list versions)
-- Version tracking on processor runs
+- ~~POST /processor_versions (create version)~~
+- ~~POST /processor_versions/{id}:publish (publish version)~~
+- ~~GET /processor_versions/{id} (get version)~~
+- ~~GET /processors/{id}/versions (list versions)~~
+- ~~Version tracking on processor runs~~
 
-**Action:** Implement processor versioning system
+**Action:** ~~Implement processor versioning system~~ **COMPLETE**
 
-### 6. PROCESSOR RUNS
+### 6. PROCESSOR RUNS (Sprint 5 - NEXT)
 **Missing:**
 - Complete resource with full CRUD
 - POST /processor_runs (sync/async)
