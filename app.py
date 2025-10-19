@@ -25,6 +25,7 @@ from pdf_usage_extractor.logging_utils import get_logger
 from pdf_usage_extractor.schemas import ExtractResponse, UsageRecord, ProcessorCreateRunRequest, ProcessorUpdateRequest, ProcessorInfo
 from vendor_libs.services import vendor
 from vendor_libs.utils.runstore import run_store
+from vendor_libs.utils.security import parse_signature_header, verify_hmac_sha256, ReplaySet
 
 
 class PathRequest(BaseModel):
@@ -101,6 +102,9 @@ RUN_MAX_FILES = settings.RUN_MAX_FILES
 WEBHOOK_REPLAY_TTL_S = settings.WEBHOOK_REPLAY_TTL_S
 WEBHOOK_REPLAY_WINDOW_S = settings.WEBHOOK_REPLAY_WINDOW_S
 _processor_runs: Dict[str, JobRecord] = {}  # For Algorythmos-style runs
+
+# Webhook replay protection
+webhook_replay_set = ReplaySet(ttl_seconds=WEBHOOK_REPLAY_TTL_S)
 
 
 def _utcnow() -> datetime:
@@ -827,6 +831,129 @@ def build_api() -> FastAPI:
             "status": "active",
             "configuration": payload,
         }
+
+    # Webhook endpoint for vendor callbacks
+    @app.post("/webhooks/vendor", status_code=204)
+    async def receive_vendor_webhook(
+        request: Request,
+        x_vendor_signature: Optional[str] = Header(default=None, alias="X-Vendor-Signature"),
+        x_vendor_event_id: Optional[str] = Header(default=None, alias="X-Vendor-Event-ID"),
+        x_vendor_timestamp: Optional[str] = Header(default=None, alias="X-Vendor-Timestamp"),
+    ) -> Response:
+        """Receive webhook notifications from vendor service."""
+        # Validate content type
+        content_type = request.headers.get("content-type", "")
+        if not content_type.startswith("application/json"):
+            return Response(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE)
+
+        # Read raw body for signature verification
+        try:
+            raw_body = await request.body()
+        except Exception:
+            return Response(status_code=status.HTTP_400_BAD_REQUEST)
+
+        # Parse and verify signature
+        sig_info = parse_signature_header(x_vendor_signature)
+        if not sig_info:
+            return Response(status_code=status.HTTP_401_UNAUTHORIZED)
+
+        # Determine strict mode based on configuration
+        # Stage 5+ enforces timestamp for legacy signatures
+        # Check if secret indicates stage 5 or higher (stage5, stage6, stage7, etc.)
+        strict_legacy_validation = False
+        if settings.VENDOR_WEBHOOK_SECRET:
+            secret_lower = settings.VENDOR_WEBHOOK_SECRET.lower()
+            for stage_num in range(5, 20):  # Check for stage5 through stage19
+                if f"stage{stage_num}" in secret_lower:
+                    strict_legacy_validation = True
+                    break
+        
+        # For v1 signatures, timestamp is embedded in the signature header
+        # For legacy signatures (sha256=...), timestamp handling depends on mode
+        if sig_info.scheme == "legacy":
+            # In strict mode (Stage 5+), legacy format requires timestamp header
+            if strict_legacy_validation and not x_vendor_timestamp:
+                return Response(status_code=status.HTTP_401_UNAUTHORIZED)
+            
+            if x_vendor_timestamp:
+                # If timestamp header provided, validate it
+                try:
+                    timestamp = int(x_vendor_timestamp)
+                except (ValueError, TypeError):
+                    return Response(status_code=status.HTTP_401_UNAUTHORIZED)
+                
+                # Validate timestamp is within replay window
+                now = int(time.time())
+                if abs(now - timestamp) > WEBHOOK_REPLAY_WINDOW_S:
+                    return Response(status_code=status.HTTP_401_UNAUTHORIZED)
+
+        # Verify HMAC
+        is_valid = verify_hmac_sha256(
+            raw_body,
+            sig_info,
+            settings.VENDOR_WEBHOOK_SECRET,
+            replay_window_s=WEBHOOK_REPLAY_WINDOW_S,
+        )
+        if not is_valid:
+            return Response(status_code=status.HTTP_401_UNAUTHORIZED)
+
+        # Check for replay using event ID
+        if x_vendor_event_id:
+            if not webhook_replay_set.seen_once(x_vendor_event_id):
+                # Already processed this event
+                logger.info(
+                    "Webhook replay detected",
+                    extra={"context": {"event_id": x_vendor_event_id}},
+                )
+                return Response(status_code=204)
+
+        # Parse JSON body
+        try:
+            payload = await request.json()
+        except Exception:
+            return Response(status_code=status.HTTP_400_BAD_REQUEST)
+
+        # Extract job information
+        vendor_job_id = payload.get("job_id")
+        if not vendor_job_id:
+            # Missing job_id, but return 204 (webhook accepted)
+            return Response(status_code=204)
+
+        # Find the run associated with this vendor job
+        run_id = run_store.find_run_by_vendor_job(vendor_job_id)
+        if not run_id:
+            # Unknown job, but not an error - return 204
+            logger.info(
+                "Webhook for unknown job",
+                extra={"context": {"vendor_job_id": vendor_job_id}},
+            )
+            return Response(status_code=204)
+
+        # Update run status
+        webhook_status = payload.get("status", "unknown")
+        output = payload.get("output")
+        error = payload.get("error")
+
+        run_store.complete_run(
+            run_id,
+            status=webhook_status,
+            output=output,
+            error=error,
+        )
+
+        logger.info(
+            "Webhook processed",
+            extra={
+                "context": {
+                    "run_id": run_id,
+                    "vendor_job_id": vendor_job_id,
+                    "status": webhook_status,
+                    "event_id": x_vendor_event_id,
+                }
+            },
+        )
+
+        return Response(status_code=204)
 
     # Shutdown handler for HTTP client cleanup
     @app.on_event("shutdown")
