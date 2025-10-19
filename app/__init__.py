@@ -36,4 +36,18 @@ app: Any = getattr(_app_entry, "app", None)
 if app is None:  # pragma: no cover
     raise RuntimeError("Top-level app.py does not expose an 'app' attribute")
 
-__all__ = ["app"]
+# Expose Stage 3+ constants for tests
+RUN_MAX_FILE_BYTES: int = getattr(_app_entry, "RUN_MAX_FILE_BYTES", 10 * 1024 * 1024)
+RUN_MAX_FILES: int = getattr(_app_entry, "RUN_MAX_FILES", 50)
+WEBHOOK_REPLAY_TTL_S: int = getattr(_app_entry, "WEBHOOK_REPLAY_TTL_S", 300)
+WEBHOOK_REPLAY_WINDOW_S: int = getattr(_app_entry, "WEBHOOK_REPLAY_WINDOW_S", 60)
+_processor_runs: Any = getattr(_app_entry, "_processor_runs", {})
+
+__all__ = [
+    "app",
+    "RUN_MAX_FILE_BYTES",
+    "RUN_MAX_FILES",
+    "WEBHOOK_REPLAY_TTL_S",
+    "WEBHOOK_REPLAY_WINDOW_S",
+    "_processor_runs",
+]
