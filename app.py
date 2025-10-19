@@ -889,30 +889,29 @@ def build_api() -> FastAPI:
     async def list_extractors(
         request: Request,
         limit: int = Query(20, ge=1, le=100, description="Maximum number of results"),
-        cursor: Optional[str] = Query(None, description="Pagination cursor"),
+        offset: int = Query(0, ge=0, description="Number of items to skip"),
         schema_id: Optional[str] = Query(None, description="Filter by schema ID"),
         enabled: Optional[bool] = Query(None, description="Filter by enabled status"),
         tenant_ctx: Dict[str, str] = Depends(require_key),
         session: AsyncSession = Depends(get_session),
     ):
         """List extractors for the tenant."""
+        from core.config import build_pagination_meta
+        
         tenant_id = tenant_ctx["tenant"]
         
-        extractors, total, next_cursor, has_more = await extractor_service.list_extractors(
+        items, total = await extractor_service.list_extractors(
             db=session,
             tenant_id=tenant_id,
             limit=limit,
-            cursor=cursor,
+            offset=offset,
             schema_id=schema_id,
             enabled=enabled,
         )
         
         return {
-            "items": extractors,
-            "total": total,
-            "limit": limit,
-            "cursor": next_cursor,
-            "has_more": has_more,
+            "items": items,
+            "meta": build_pagination_meta(limit, offset, total)
         }
     
     @app.get(
@@ -1078,28 +1077,27 @@ def build_api() -> FastAPI:
     async def list_classifiers(
         request: Request,
         limit: int = Query(20, ge=1, le=100, description="Maximum number of results"),
-        cursor: Optional[str] = Query(None, description="Pagination cursor"),
+        offset: int = Query(0, ge=0, description="Number of items to skip"),
         enabled: Optional[bool] = Query(None, description="Filter by enabled status"),
         tenant_ctx: Dict[str, str] = Depends(require_key),
         session: AsyncSession = Depends(get_session),
     ):
         """List classifiers for the tenant."""
+        from core.config import build_pagination_meta
+        
         tenant_id = tenant_ctx["tenant"]
         
-        classifiers, total, next_cursor, has_more = await classifier_service.list_classifiers(
+        items, total = await classifier_service.list_classifiers(
             db=session,
             tenant_id=tenant_id,
             limit=limit,
-            cursor=cursor,
+            offset=offset,
             enabled=enabled,
         )
         
         return {
-            "items": classifiers,
-            "total": total,
-            "limit": limit,
-            "cursor": next_cursor,
-            "has_more": has_more,
+            "items": items,
+            "meta": build_pagination_meta(limit, offset, total)
         }
     
     @app.get(
@@ -1265,28 +1263,27 @@ def build_api() -> FastAPI:
     async def list_splitters(
         request: Request,
         limit: int = Query(20, ge=1, le=100, description="Maximum number of results"),
-        cursor: Optional[str] = Query(None, description="Pagination cursor"),
+        offset: int = Query(0, ge=0, description="Number of items to skip"),
         enabled: Optional[bool] = Query(None, description="Filter by enabled status"),
         tenant_ctx: Dict[str, str] = Depends(require_key),
         session: AsyncSession = Depends(get_session),
     ):
         """List splitters for the tenant."""
+        from core.config import build_pagination_meta
+        
         tenant_id = tenant_ctx["tenant"]
         
-        splitters, total, next_cursor, has_more = await splitter_service.list_splitters(
+        items, total = await splitter_service.list_splitters(
             db=session,
             tenant_id=tenant_id,
             limit=limit,
-            cursor=cursor,
+            offset=offset,
             enabled=enabled,
         )
         
         return {
-            "items": splitters,
-            "total": total,
-            "limit": limit,
-            "cursor": next_cursor,
-            "has_more": has_more,
+            "items": items,
+            "meta": build_pagination_meta(limit, offset, total)
         }
     
     @app.get(

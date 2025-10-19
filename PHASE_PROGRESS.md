@@ -3,12 +3,12 @@
 ## Execution Status
 
 **Started:** 2025-10-19
-**Current Phase:** PHASE 0 - Pre-Flight
+**Current Phase:** PHASE 1 - Foundation + /schemas CRUD
 **Overall Status:** IN_PROGRESS
 
 ---
 
-## PHASE 0: Pre-Flight Checks ⏳
+## PHASE 0: Pre-Flight Checks ✓
 
 **Goal:** Establish architectural foundations and align codebase standards
 
@@ -21,31 +21,43 @@
 - [x] Core configuration module: `core/config.py` with constants
 - [x] Error response shape: Standardized builder functions
 - [x] Pagination: Standardized meta builder
-
-### In Progress
-- [ ] Generate Alembic migration for soft delete columns
-- [ ] Update services to filter by `is_deleted`
-- [ ] Route count smoke test
-- [ ] Commit pre-flight changes
+- [x] Generated Alembic migration for soft delete columns
+- [x] Executed migration successfully (20251019_soft_delete is head)
+- [x] Route count smoke test (38 routes working)
+- [x] Committed pre-flight changes
 
 ### Notes
 - API uses `/api` root_path in FastAPI config
 - All existing endpoints return proper tenant isolation
 - `PathParam` alias avoids conflict with `pathlib.Path`
+- Migration adds is_deleted boolean column + indexes to 4 tables
 
 ---
 
-## PHASE 1: Foundation + /schemas CRUD 📋
+## PHASE 1: Foundation + /schemas CRUD ⏳
 
-**Status:** NOT_STARTED
+**Status:** IN_PROGRESS (Service Layer Complete)
 
-### Checklist
-- [ ] Verify existing schema DTOs
-- [ ] Add soft-delete to schema service
-- [ ] Update pagination to use offset-based (not cursor)
-- [ ] Add proper error response shapes
+### Completed ✓
+- [x] Schema service: soft-delete + offset pagination + standardized errors
+- [x] Schema endpoints: Updated to use build_pagination_meta and build_error_response
+- [x] Extractor service: soft-delete + offset pagination
+- [x] Classifier service: soft-delete + offset pagination
+- [x] Splitter service: soft-delete + offset pagination
+- [x] All services return tuple (items, total) for flexible meta construction
+- [x] All deletes are now soft deletes (set is_deleted=True)
+- [x] Duplicate name checks only check non-deleted resources
+- [x] Schema verification in extractor service filters deleted schemas
+
+### In Progress
+- [ ] Update app.py endpoints for extractor/classifier/splitter with new pagination
 - [ ] Update tests for soft-delete behavior
 - [ ] Verify with curl tests
+
+### Notes
+- Service signatures changed: `cursor` parameter → `offset` parameter
+- Return type changed from response models to tuples for separation of concerns
+- All queries filter `is_deleted == False`
 
 ---
 
