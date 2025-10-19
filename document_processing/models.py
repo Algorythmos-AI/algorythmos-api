@@ -272,6 +272,44 @@ class ProcessorDB(Base):
         return f"<Processor(id={self.id}, name={self.name}, type={self.processor_type})>"
 
 
+class ProcessorVersionDB(Base):
+    """Database model for processor versions (Sprint 4 - P3.1-P3.2)."""
+    
+    __tablename__ = "processor_versions"
+    
+    id = Column(String, primary_key=True)
+    processor_id = Column(String, nullable=False, index=True)
+    tenant_id = Column(String, nullable=False, index=True)
+    version_number = Column(Integer, nullable=False)  # Sequential version number
+    
+    # Version content (snapshot of processor at version creation)
+    name = Column(String(100), nullable=False)
+    description = Column(String(500), nullable=True)
+    processor_type = Column(String(50), nullable=False)
+    implementation = Column(JSON, nullable=False)
+    input_schema = Column(JSON, nullable=True)
+    output_schema = Column(JSON, nullable=True)
+    
+    # Version lifecycle
+    status = Column(String(20), nullable=False, default='draft', index=True)  # draft, published, deprecated
+    is_default = Column(Boolean, nullable=False, default=False, index=True)
+    published_at = Column(DateTime, nullable=True)
+    deprecated_at = Column(DateTime, nullable=True)
+    
+    # Change tracking
+    change_notes = Column(Text, nullable=True)
+    created_by = Column(String(100), nullable=True)
+    
+    # Metadata
+    version_metadata = Column(JSON, nullable=True)
+    is_deleted = Column(Boolean, nullable=False, default=False, index=True)
+    created_at = Column(DateTime, nullable=False, default=func.now())
+    updated_at = Column(DateTime, nullable=False, default=func.now(), onupdate=func.now())
+    
+    def __repr__(self) -> str:
+        return f"<ProcessorVersion(id={self.id}, processor_id={self.processor_id}, version={self.version_number}, status={self.status})>"
+
+
 class WorkflowDB(Base):
     """Database model for workflows (chains of processors)."""
     
