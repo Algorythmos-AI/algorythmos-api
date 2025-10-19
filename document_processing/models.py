@@ -331,6 +331,44 @@ class WorkflowDB(Base):
         return f"<Workflow(id={self.id}, name={self.name})>"
 
 
+class WorkflowRunDB(Base):
+    """Database model for workflow runs (Sprint 6 - P5.1-P5.2)."""
+    
+    __tablename__ = "workflow_runs"
+    
+    id = Column(String, primary_key=True)
+    workflow_id = Column(String, nullable=False, index=True)
+    tenant_id = Column(String, nullable=False, index=True)
+    file_id = Column(String, nullable=True, index=True)
+    
+    # Status and results
+    status = Column(String(20), nullable=False, index=True)  # queued, processing, completed, failed, cancelled
+    steps = Column(JSON, nullable=True)  # List of WorkflowStepResult dicts
+    output = Column(JSON, nullable=True)  # Final workflow output
+    error = Column(JSON, nullable=True)  # Error details
+    
+    # Corrections (Sprint 6 - P5.2)
+    corrections = Column(JSON, nullable=True)  # List of FieldCorrection dicts
+    correction_count = Column(Integer, nullable=False, default=0)
+    last_corrected_at = Column(DateTime, nullable=True)
+    
+    # API version tracking
+    api_version = Column(String(50), nullable=True)
+    
+    # Timestamps
+    created_at = Column(DateTime, nullable=False, default=func.now())
+    updated_at = Column(DateTime, nullable=False, default=func.now(), onupdate=func.now())
+    started_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+    
+    # Metadata
+    run_metadata = Column(JSON, nullable=True)
+    is_deleted = Column(Boolean, nullable=False, default=False, index=True)
+    
+    def __repr__(self) -> str:
+        return f"<WorkflowRun(id={self.id}, workflow_id={self.workflow_id}, status={self.status})>"
+
+
 class EvaluationSetDB(Base):
     """Database model for evaluation sets (test datasets)."""
     
