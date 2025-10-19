@@ -14,7 +14,7 @@ from uuid import uuid4
 
 import anyio
 import httpx
-from fastapi import BackgroundTasks, Depends, FastAPI, File, Header, HTTPException, Request, Response, UploadFile, status
+from fastapi import BackgroundTasks, Depends, FastAPI, File, Header, HTTPException, Request, Response, UploadFile, status, Path as PathParam, Query, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.params import Body, Query
 from pydantic import AnyHttpUrl, BaseModel, ConfigDict
@@ -29,6 +29,67 @@ from vendor_libs.utils.runstore import run_store
 from vendor_libs.utils.security import parse_signature_header, verify_hmac_sha256, ReplaySet
 from vendor_libs.utils.observability import metrics_app, runs_started, runs_succeeded, runs_failed
 from prometheus_client import Counter, Histogram
+
+# Production middleware imports
+from document_processing.middleware import RateLimitMiddleware, IdempotencyMiddleware
+
+# Initialize metrics
+http_requests_total = None
+http_request_duration_seconds = None
+webhook_deliveries_total = None
+webhook_delivery_duration_seconds = None
+parser_runs_total = None
+parser_run_duration_seconds = None
+rate_limit_hits_total = None
+idempotency_replays_total = None
+
+# Generic document processing imports
+from document_processing.schemas import (
+    CreateSchemaRequest,
+    UpdateSchemaRequest,
+    ExtractionSchema,
+    SchemaListResponse,
+    CreateExtractorRequest,
+    UpdateExtractorRequest,
+    ExtractorConfig,
+    CreateClassifierRequest,
+    UpdateClassifierRequest,
+    ClassifierConfig,
+    CreateSplitterRequest,
+    UpdateSplitterRequest,
+    SplitterConfig,
+    # PHASE 4: File and Parser schemas
+    FileUpload,
+    ParserRunRequest,
+    ParserRunStatus,
+    ParseResult,
+    # PHASE 7: Processor, Workflow, Evaluation schemas
+    ProcessorConfig,
+    CreateProcessorRequest,
+    UpdateProcessorRequest,
+    ProcessorListResponse,
+    WorkflowConfig,
+    CreateWorkflowRequest,
+    UpdateWorkflowRequest,
+    WorkflowListResponse,
+    ExecuteWorkflowRequest,
+    WorkflowExecutionResult,
+    EvaluationSetConfig,
+    CreateEvaluationSetRequest,
+    UpdateEvaluationSetRequest,
+    EvaluationSetListResponse,
+    EvaluationResult,
+)
+from document_processing.services.schema_service import SchemaService
+from document_processing.services import extractor_service
+from document_processing.services import classifier_service
+from document_processing.services import splitter_service
+from document_processing.services import file_service
+from document_processing.services import parser_service
+from document_processing.services import processor_service
+from document_processing.services import workflow_service
+from document_processing.services import evaluation_service
+from core.config import build_error_response, build_pagination_meta
 
 # Database imports - use direct module references to avoid package conflicts
 from sqlalchemy import select, and_, func
@@ -120,6 +181,9 @@ http_request_duration_seconds = None
 def _get_or_create_metrics():
     """Get or create HTTP metrics (handles reloads in tests)."""
     global http_requests_total, http_request_duration_seconds
+    global webhook_deliveries_total, webhook_delivery_duration_seconds
+    global parser_runs_total, parser_run_duration_seconds
+    global rate_limit_hits_total, idempotency_replays_total
     
     if http_requests_total is None:
         try:
@@ -150,7 +214,96 @@ def _get_or_create_metrics():
                 next((c for c in REGISTRY._collector_to_names if hasattr(c, '_name') and c._name == 'http_request_duration_seconds'), None)
             )
     
-    return http_requests_total, http_request_duration_seconds
+    # Webhook metrics
+    if webhook_deliveries_total is None:
+        try:
+            webhook_deliveries_total = Counter(
+                "webhook_deliveries_total",
+                "Total webhook deliveries",
+                ["event_type", "status"]
+            )
+        except ValueError:
+            from prometheus_client import REGISTRY
+            webhook_deliveries_total = REGISTRY._collector_to_names.get(
+                next((c for c in REGISTRY._collector_to_names if hasattr(c, '_name') and c._name == 'webhook_deliveries_total'), None)
+            )
+    
+    if webhook_delivery_duration_seconds is None:
+        try:
+            webhook_delivery_duration_seconds = Histogram(
+                "webhook_delivery_duration_seconds",
+                "Webhook delivery latency",
+                ["event_type", "status"],
+                buckets=(0.1, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0)
+            )
+        except ValueError:
+            from prometheus_client import REGISTRY
+            webhook_delivery_duration_seconds = REGISTRY._collector_to_names.get(
+                next((c for c in REGISTRY._collector_to_names if hasattr(c, '_name') and c._name == 'webhook_delivery_duration_seconds'), None)
+            )
+    
+    # Parser run metrics
+    if parser_runs_total is None:
+        try:
+            parser_runs_total = Counter(
+                "parser_runs_total",
+                "Total parser runs",
+                ["status", "format"]
+            )
+        except ValueError:
+            from prometheus_client import REGISTRY
+            parser_runs_total = REGISTRY._collector_to_names.get(
+                next((c for c in REGISTRY._collector_to_names if hasattr(c, '_name') and c._name == 'parser_runs_total'), None)
+            )
+    
+    if parser_run_duration_seconds is None:
+        try:
+            parser_run_duration_seconds = Histogram(
+                "parser_run_duration_seconds",
+                "Parser run latency",
+                ["status", "format"],
+                buckets=(0.1, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 120.0)
+            )
+        except ValueError:
+            from prometheus_client import REGISTRY
+            parser_run_duration_seconds = REGISTRY._collector_to_names.get(
+                next((c for c in REGISTRY._collector_to_names if hasattr(c, '_name') and c._name == 'parser_run_duration_seconds'), None)
+            )
+    
+    # Rate limiting metrics
+    if rate_limit_hits_total is None:
+        try:
+            rate_limit_hits_total = Counter(
+                "rate_limit_hits_total",
+                "Total rate limit hits",
+                ["tenant_id", "limit_type"]
+            )
+        except ValueError:
+            from prometheus_client import REGISTRY
+            rate_limit_hits_total = REGISTRY._collector_to_names.get(
+                next((c for c in REGISTRY._collector_to_names if hasattr(c, '_name') and c._name == 'rate_limit_hits_total'), None)
+            )
+    
+    # Idempotency metrics
+    if idempotency_replays_total is None:
+        try:
+            idempotency_replays_total = Counter(
+                "idempotency_replays_total",
+                "Total idempotency key replays",
+                ["tenant_id", "endpoint"]
+            )
+        except ValueError:
+            from prometheus_client import REGISTRY
+            idempotency_replays_total = REGISTRY._collector_to_names.get(
+                next((c for c in REGISTRY._collector_to_names if hasattr(c, '_name') and c._name == 'idempotency_replays_total'), None)
+            )
+    
+    return (
+        http_requests_total, http_request_duration_seconds,
+        webhook_deliveries_total, webhook_delivery_duration_seconds,
+        parser_runs_total, parser_run_duration_seconds,
+        rate_limit_hits_total, idempotency_replays_total
+    )
 
 
 class MetricsMiddleware(BaseHTTPMiddleware):
@@ -171,7 +324,9 @@ class MetricsMiddleware(BaseHTTPMiddleware):
         status_code = str(response.status_code)
         
         # Get or create metrics
-        requests_total, request_duration = _get_or_create_metrics()
+        metrics = _get_or_create_metrics()
+        requests_total = metrics[0]
+        request_duration = metrics[1]
         
         # Record metrics
         if requests_total and request_duration:
@@ -247,25 +402,66 @@ def _enforce_rate_limit(tenant_id: str) -> None:
 
 async def require_key(
     request: Request,
-    x_api_key: Optional[str] = Header(default=None),
-    x_tenant_id: Optional[str] = Header(default=None),
+    x_api_key: Optional[str] = Header(default=None, alias="x-api-key"),
+    authorization: Optional[str] = Header(default=None),
+    x_tenant_id: Optional[str] = Header(default=None, alias="x-tenant-id"),
+    x_extend_api_version: Optional[str] = Header(default=None, alias="x-extend-api-version"),
+    x_api_version: Optional[str] = Header(default=None, alias="x-api-version"),
 ) -> Dict[str, str]:
-    """Validate API key and tenant ID."""
-    if x_api_key != settings.ALG_API_KEY:
+    """
+    Validate authentication and extract tenant context.
+    
+    Supports:
+    - X-API-Key header (legacy)
+    - Authorization: Bearer <token> header (Extend parity)
+    - X-Tenant-ID header (required, 400 if missing)
+    - x-extend-api-version or x-api-version header (optional, stored for tracking)
+    """
+    # Extract Bearer token if present
+    bearer_token = None
+    if authorization and authorization.startswith("Bearer "):
+        bearer_token = authorization[7:]  # Strip "Bearer " prefix
+    
+    # Authenticate: Bearer token OR API key required
+    authenticated = False
+    if bearer_token:
+        # Validate Bearer token (for now, use same validation as API key)
+        # In production, implement proper JWT validation
+        if bearer_token == settings.ALG_API_KEY:
+            authenticated = True
+    elif x_api_key:
+        # Validate API key
+        if x_api_key == settings.ALG_API_KEY:
+            authenticated = True
+    
+    if not authenticated:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, 
-            detail={"code": "UNAUTHORIZED", "message": "Invalid API key"}
+            detail={"code": "UNAUTHORIZED", "message": "Invalid or missing authentication"}
         )
     
+    # Require X-Tenant-ID header
     if not x_tenant_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, 
-            detail={"code": "MISSING_TENANT", "message": "Missing X-Tenant-Id header"}
+            detail={"code": "MISSING_TENANT", "message": "Missing X-Tenant-ID header"}
         )
-
+    
+    # Enforce rate limiting
     _enforce_rate_limit(x_tenant_id)
+    
+    # Store context in request state
     request.state.tenant_id = x_tenant_id
-    return {"tenant": x_tenant_id}
+    
+    # Determine API version (prefer x-extend-api-version, fallback to x-api-version)
+    api_version = x_extend_api_version or x_api_version or "2025-04-21"  # Default version
+    request.state.api_version = api_version
+    
+    return {
+        "tenant": x_tenant_id,
+        "api_version": api_version
+    }
+
 
 
 async def _run_extraction(
@@ -560,6 +756,11 @@ def build_api() -> FastAPI:
         allow_headers=["Authorization", "Content-Type", "Idempotency-Key", "X-Request-ID", "*"],
         expose_headers=["X-Request-ID"],  # So the browser can read it for debugging
     )
+    
+    # Production middlewares
+    app.add_middleware(RateLimitMiddleware, requests_per_minute=60, requests_per_hour=1000)
+    app.add_middleware(IdempotencyMiddleware, ttl_seconds=86400)  # 24 hours
+    
     app.add_middleware(MetricsMiddleware)
     app.add_middleware(FileSizeMiddleware)
     app.add_middleware(RequestContextMiddleware)
@@ -616,6 +817,1448 @@ def build_api() -> FastAPI:
     async def metrics():
         """Expose Prometheus metrics."""
         return await metrics_app()()
+
+    # ==================== GENERIC DOCUMENT PROCESSING ENDPOINTS ====================
+    
+    # Schema Management Endpoints
+    @app.post(
+        "/schemas",
+        response_model=ExtractionSchema,
+        status_code=status.HTTP_201_CREATED,
+        tags=["schemas"],
+        summary="Create extraction schema",
+        description="Create a new custom extraction schema with field definitions. Schemas define what fields to extract from documents.",
+    )
+    async def create_schema(
+        request: Request,
+        payload: CreateSchemaRequest = Body(..., description="Schema configuration"),
+        tenant_ctx: Dict[str, str] = Depends(require_key),
+        session: AsyncSession = Depends(get_session),
+    ) -> ExtractionSchema:
+        """Create a new extraction schema."""
+        tenant_id = tenant_ctx["tenant"]
+        
+        try:
+            schema = await SchemaService.create_schema(
+                session=session,
+                tenant_id=tenant_id,
+                request=payload,
+            )
+            logger.info(
+                "Schema created",
+                extra={
+                    "context": {
+                        "schema_id": schema.schema_id,
+                        "schema_name": schema.name,
+                        "tenant_id": tenant_id,
+                        "field_count": len(schema.fields),
+                    }
+                }
+            )
+            return schema
+        except ValueError as e:
+            from core.config import build_error_response
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=build_error_response("validation_error", str(e))
+            )
+    
+    @app.get(
+        "/schemas",
+        tags=["schemas"],
+        summary="List extraction schemas",
+        description="Retrieve a paginated list of extraction schemas for the current tenant.",
+    )
+    async def list_schemas(
+        request: Request,
+        limit: int = Query(default=20, ge=1, le=100, description="Maximum number of items to return"),
+        offset: int = Query(default=0, ge=0, description="Number of items to skip"),
+        tenant_ctx: Dict[str, str] = Depends(require_key),
+        session: AsyncSession = Depends(get_session),
+    ):
+        """List extraction schemas."""
+        from core.config import build_pagination_meta
+        
+        tenant_id = tenant_ctx["tenant"]
+        
+        items, total = await SchemaService.list_schemas(
+            session=session,
+            tenant_id=tenant_id,
+            limit=limit,
+            offset=offset,
+        )
+        
+        return {
+            "items": items,
+            "meta": build_pagination_meta(limit, offset, total)
+        }
+    
+    @app.get(
+        "/schemas/{schema_id}",
+        response_model=ExtractionSchema,
+        tags=["schemas"],
+        summary="Get schema details",
+        description="Retrieve details of a specific extraction schema by ID.",
+    )
+    async def get_schema(
+        request: Request,
+        schema_id: str,
+        tenant_ctx: Dict[str, str] = Depends(require_key),
+        session: AsyncSession = Depends(get_session),
+    ) -> ExtractionSchema:
+        """Get schema by ID."""
+        from core.config import build_error_response
+        
+        tenant_id = tenant_ctx["tenant"]
+        
+        schema = await SchemaService.get_schema(
+            session=session,
+            tenant_id=tenant_id,
+            schema_id=schema_id,
+        )
+        
+        if not schema:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=build_error_response("resource_not_found", f"Schema '{schema_id}' not found")
+            )
+        
+        return schema
+    
+    @app.patch(
+        "/schemas/{schema_id}",
+        response_model=ExtractionSchema,
+        tags=["schemas"],
+        summary="Update schema",
+        description="Update an existing extraction schema. Field changes increment the schema version.",
+    )
+    async def update_schema(
+        request: Request,
+        schema_id: str,
+        payload: UpdateSchemaRequest = Body(..., description="Schema updates"),
+        tenant_ctx: Dict[str, str] = Depends(require_key),
+        session: AsyncSession = Depends(get_session),
+    ) -> ExtractionSchema:
+        """Update an existing schema."""
+        from core.config import build_error_response
+        
+        tenant_id = tenant_ctx["tenant"]
+        
+        try:
+            schema = await SchemaService.update_schema(
+                session=session,
+                tenant_id=tenant_id,
+                schema_id=schema_id,
+                request=payload,
+            )
+            
+            if not schema:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=build_error_response("resource_not_found", f"Schema '{schema_id}' not found")
+                )
+            
+            logger.info(
+                "Schema updated",
+                extra={
+                    "context": {
+                        "schema_id": schema.schema_id,
+                        "schema_name": schema.name,
+                        "version": schema.version,
+                        "tenant_id": tenant_id,
+                    }
+                }
+            )
+            return schema
+        except ValueError as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=build_error_response("validation_error", str(e))
+            )
+    
+    @app.delete(
+        "/schemas/{schema_id}",
+        status_code=status.HTTP_204_NO_CONTENT,
+        tags=["schemas"],
+        summary="Delete schema",
+        description="Delete an extraction schema. This operation cannot be undone.",
+    )
+    async def delete_schema(
+        request: Request,
+        schema_id: str,
+        tenant_ctx: Dict[str, str] = Depends(require_key),
+        session: AsyncSession = Depends(get_session),
+    ) -> Response:
+        """Delete a schema."""
+        from core.config import build_error_response
+        
+        tenant_id = tenant_ctx["tenant"]
+        
+        deleted = await SchemaService.delete_schema(
+            session=session,
+            tenant_id=tenant_id,
+            schema_id=schema_id,
+        )
+        
+        if not deleted:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=build_error_response("resource_not_found", f"Schema '{schema_id}' not found")
+            )
+        
+        logger.info(
+            "Schema deleted",
+            extra={
+                "context": {
+                    "schema_id": schema_id,
+                    "tenant_id": tenant_id,
+                }
+            }
+        )
+        
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    # Extractor Management Endpoints
+    @app.post(
+        "/extractors",
+        response_model=ExtractorConfig,
+        status_code=status.HTTP_201_CREATED,
+        tags=["extractors"],
+        summary="Create extractor",
+        description="Create a new extractor that uses a schema to extract data from documents.",
+    )
+    async def create_extractor(
+        request: Request,
+        payload: CreateExtractorRequest = Body(...),
+        tenant_ctx: Dict[str, str] = Depends(require_key),
+        session: AsyncSession = Depends(get_session),
+    ) -> ExtractorConfig:
+        """Create a new extractor."""
+        tenant_id = tenant_ctx["tenant"]
+        
+        try:
+            extractor = await extractor_service.create_extractor(
+                db=session,
+                tenant_id=tenant_id,
+                request=payload,
+            )
+            logger.info(
+                "Extractor created",
+                extra={
+                    "context": {
+                        "extractor_id": extractor.extractor_id,
+                        "extractor_name": extractor.name,
+                        "schema_id": extractor.schema_id,
+                        "tenant_id": tenant_id,
+                    }
+                }
+            )
+            return extractor
+        except ValueError as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"code": "INVALID_EXTRACTOR", "message": str(e)}
+            )
+    
+    @app.get(
+        "/extractors",
+        tags=["extractors"],
+        summary="List extractors",
+        description="Get a paginated list of extractors for this tenant.",
+    )
+    async def list_extractors(
+        request: Request,
+        limit: int = Query(20, ge=1, le=100, description="Maximum number of results"),
+        offset: int = Query(0, ge=0, description="Number of items to skip"),
+        schema_id: Optional[str] = Query(None, description="Filter by schema ID"),
+        enabled: Optional[bool] = Query(None, description="Filter by enabled status"),
+        tenant_ctx: Dict[str, str] = Depends(require_key),
+        session: AsyncSession = Depends(get_session),
+    ):
+        """List extractors for the tenant."""
+        from core.config import build_pagination_meta
+        
+        tenant_id = tenant_ctx["tenant"]
+        
+        items, total = await extractor_service.list_extractors(
+            db=session,
+            tenant_id=tenant_id,
+            limit=limit,
+            offset=offset,
+            schema_id=schema_id,
+            enabled=enabled,
+        )
+        
+        return {
+            "items": items,
+            "meta": build_pagination_meta(limit, offset, total)
+        }
+    
+    @app.get(
+        "/extractors/{extractor_id}",
+        response_model=ExtractorConfig,
+        tags=["extractors"],
+        summary="Get extractor",
+        description="Get details of a specific extractor by ID.",
+    )
+    async def get_extractor(
+        request: Request,
+        extractor_id: str = PathParam(..., description="Extractor ID"),
+        tenant_ctx: Dict[str, str] = Depends(require_key),
+        session: AsyncSession = Depends(get_session),
+    ) -> ExtractorConfig:
+        """Get an extractor by ID."""
+        tenant_id = tenant_ctx["tenant"]
+        
+        extractor = await extractor_service.get_extractor(
+            db=session,
+            tenant_id=tenant_id,
+            extractor_id=extractor_id,
+        )
+        
+        if not extractor:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"code": "EXTRACTOR_NOT_FOUND", "message": f"Extractor '{extractor_id}' not found"}
+            )
+        
+        return extractor
+    
+    @app.patch(
+        "/extractors/{extractor_id}",
+        response_model=ExtractorConfig,
+        tags=["extractors"],
+        summary="Update extractor",
+        description="Update an existing extractor's configuration.",
+    )
+    async def update_extractor(
+        request: Request,
+        extractor_id: str = PathParam(..., description="Extractor ID"),
+        payload: UpdateExtractorRequest = Body(...),
+        tenant_ctx: Dict[str, str] = Depends(require_key),
+        session: AsyncSession = Depends(get_session),
+    ) -> ExtractorConfig:
+        """Update an extractor."""
+        tenant_id = tenant_ctx["tenant"]
+        
+        extractor = await extractor_service.update_extractor(
+            db=session,
+            tenant_id=tenant_id,
+            extractor_id=extractor_id,
+            request=payload,
+        )
+        
+        if not extractor:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"code": "EXTRACTOR_NOT_FOUND", "message": f"Extractor '{extractor_id}' not found"}
+            )
+        
+        logger.info(
+            "Extractor updated",
+            extra={
+                "context": {
+                    "extractor_id": extractor.extractor_id,
+                    "extractor_name": extractor.name,
+                    "tenant_id": tenant_id,
+                }
+            }
+        )
+        
+        return extractor
+    
+    @app.delete(
+        "/extractors/{extractor_id}",
+        status_code=status.HTTP_204_NO_CONTENT,
+        tags=["extractors"],
+        summary="Delete extractor",
+        description="Delete an extractor permanently.",
+    )
+    async def delete_extractor(
+        request: Request,
+        extractor_id: str = PathParam(..., description="Extractor ID"),
+        tenant_ctx: Dict[str, str] = Depends(require_key),
+        session: AsyncSession = Depends(get_session),
+    ):
+        """Delete an extractor."""
+        tenant_id = tenant_ctx["tenant"]
+        
+        deleted = await extractor_service.delete_extractor(
+            db=session,
+            tenant_id=tenant_id,
+            extractor_id=extractor_id,
+        )
+        
+        if not deleted:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"code": "EXTRACTOR_NOT_FOUND", "message": f"Extractor '{extractor_id}' not found"}
+            )
+        
+        logger.info(
+            "Extractor deleted",
+            extra={
+                "context": {
+                    "extractor_id": extractor_id,
+                    "tenant_id": tenant_id,
+                }
+            }
+        )
+        
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    # Classifier Management Endpoints
+    @app.post(
+        "/classifiers",
+        response_model=ClassifierConfig,
+        status_code=status.HTTP_201_CREATED,
+        tags=["classifiers"],
+        summary="Create classifier",
+        description="Create a new classifier for document classification.",
+    )
+    async def create_classifier(
+        request: Request,
+        payload: CreateClassifierRequest = Body(...),
+        tenant_ctx: Dict[str, str] = Depends(require_key),
+        session: AsyncSession = Depends(get_session),
+    ) -> ClassifierConfig:
+        """Create a new classifier."""
+        tenant_id = tenant_ctx["tenant"]
+        
+        try:
+            classifier = await classifier_service.create_classifier(
+                db=session,
+                tenant_id=tenant_id,
+                request=payload,
+            )
+            logger.info(
+                "Classifier created",
+                extra={
+                    "context": {
+                        "classifier_id": classifier.classifier_id,
+                        "classifier_name": classifier.name,
+                        "tenant_id": tenant_id,
+                    }
+                }
+            )
+            return classifier
+        except ValueError as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"code": "INVALID_CLASSIFIER", "message": str(e)}
+            )
+    
+    @app.get(
+        "/classifiers",
+        tags=["classifiers"],
+        summary="List classifiers",
+        description="Get a paginated list of classifiers for this tenant.",
+    )
+    async def list_classifiers(
+        request: Request,
+        limit: int = Query(20, ge=1, le=100, description="Maximum number of results"),
+        offset: int = Query(0, ge=0, description="Number of items to skip"),
+        enabled: Optional[bool] = Query(None, description="Filter by enabled status"),
+        tenant_ctx: Dict[str, str] = Depends(require_key),
+        session: AsyncSession = Depends(get_session),
+    ):
+        """List classifiers for the tenant."""
+        from core.config import build_pagination_meta
+        
+        tenant_id = tenant_ctx["tenant"]
+        
+        items, total = await classifier_service.list_classifiers(
+            db=session,
+            tenant_id=tenant_id,
+            limit=limit,
+            offset=offset,
+            enabled=enabled,
+        )
+        
+        return {
+            "items": items,
+            "meta": build_pagination_meta(limit, offset, total)
+        }
+    
+    @app.get(
+        "/classifiers/{classifier_id}",
+        response_model=ClassifierConfig,
+        tags=["classifiers"],
+        summary="Get classifier",
+        description="Get details of a specific classifier by ID.",
+    )
+    async def get_classifier(
+        request: Request,
+        classifier_id: str = PathParam(..., description="Classifier ID"),
+        tenant_ctx: Dict[str, str] = Depends(require_key),
+        session: AsyncSession = Depends(get_session),
+    ) -> ClassifierConfig:
+        """Get a classifier by ID."""
+        tenant_id = tenant_ctx["tenant"]
+        
+        classifier = await classifier_service.get_classifier(
+            db=session,
+            tenant_id=tenant_id,
+            classifier_id=classifier_id,
+        )
+        
+        if not classifier:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"code": "CLASSIFIER_NOT_FOUND", "message": f"Classifier '{classifier_id}' not found"}
+            )
+        
+        return classifier
+    
+    @app.patch(
+        "/classifiers/{classifier_id}",
+        response_model=ClassifierConfig,
+        tags=["classifiers"],
+        summary="Update classifier",
+        description="Update an existing classifier's configuration.",
+    )
+    async def update_classifier(
+        request: Request,
+        classifier_id: str = PathParam(..., description="Classifier ID"),
+        payload: UpdateClassifierRequest = Body(...),
+        tenant_ctx: Dict[str, str] = Depends(require_key),
+        session: AsyncSession = Depends(get_session),
+    ) -> ClassifierConfig:
+        """Update a classifier."""
+        tenant_id = tenant_ctx["tenant"]
+        
+        classifier = await classifier_service.update_classifier(
+            db=session,
+            tenant_id=tenant_id,
+            classifier_id=classifier_id,
+            request=payload,
+        )
+        
+        if not classifier:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"code": "CLASSIFIER_NOT_FOUND", "message": f"Classifier '{classifier_id}' not found"}
+            )
+        
+        logger.info(
+            "Classifier updated",
+            extra={
+                "context": {
+                    "classifier_id": classifier.classifier_id,
+                    "classifier_name": classifier.name,
+                    "tenant_id": tenant_id,
+                }
+            }
+        )
+        
+        return classifier
+    
+    @app.delete(
+        "/classifiers/{classifier_id}",
+        status_code=status.HTTP_204_NO_CONTENT,
+        tags=["classifiers"],
+        summary="Delete classifier",
+        description="Delete a classifier permanently.",
+    )
+    async def delete_classifier(
+        request: Request,
+        classifier_id: str = PathParam(..., description="Classifier ID"),
+        tenant_ctx: Dict[str, str] = Depends(require_key),
+        session: AsyncSession = Depends(get_session),
+    ):
+        """Delete a classifier."""
+        tenant_id = tenant_ctx["tenant"]
+        
+        deleted = await classifier_service.delete_classifier(
+            db=session,
+            tenant_id=tenant_id,
+            classifier_id=classifier_id,
+        )
+        
+        if not deleted:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"code": "CLASSIFIER_NOT_FOUND", "message": f"Classifier '{classifier_id}' not found"}
+            )
+        
+        logger.info(
+            "Classifier deleted",
+            extra={
+                "context": {
+                    "classifier_id": classifier_id,
+                    "tenant_id": tenant_id,
+                }
+            }
+        )
+        
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    # Splitter Management Endpoints
+    @app.post(
+        "/splitters",
+        response_model=SplitterConfig,
+        status_code=status.HTTP_201_CREATED,
+        tags=["splitters"],
+        summary="Create splitter",
+        description="Create a new splitter for document splitting.",
+    )
+    async def create_splitter(
+        request: Request,
+        payload: CreateSplitterRequest = Body(...),
+        tenant_ctx: Dict[str, str] = Depends(require_key),
+        session: AsyncSession = Depends(get_session),
+    ) -> SplitterConfig:
+        """Create a new splitter."""
+        tenant_id = tenant_ctx["tenant"]
+        
+        try:
+            splitter = await splitter_service.create_splitter(
+                db=session,
+                tenant_id=tenant_id,
+                request=payload,
+            )
+            logger.info(
+                "Splitter created",
+                extra={
+                    "context": {
+                        "splitter_id": splitter.splitter_id,
+                        "splitter_name": splitter.name,
+                        "tenant_id": tenant_id,
+                    }
+                }
+            )
+            return splitter
+        except ValueError as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"code": "INVALID_SPLITTER", "message": str(e)}
+            )
+    
+    @app.get(
+        "/splitters",
+        tags=["splitters"],
+        summary="List splitters",
+        description="Get a paginated list of splitters for this tenant.",
+    )
+    async def list_splitters(
+        request: Request,
+        limit: int = Query(20, ge=1, le=100, description="Maximum number of results"),
+        offset: int = Query(0, ge=0, description="Number of items to skip"),
+        enabled: Optional[bool] = Query(None, description="Filter by enabled status"),
+        tenant_ctx: Dict[str, str] = Depends(require_key),
+        session: AsyncSession = Depends(get_session),
+    ):
+        """List splitters for the tenant."""
+        from core.config import build_pagination_meta
+        
+        tenant_id = tenant_ctx["tenant"]
+        
+        items, total = await splitter_service.list_splitters(
+            db=session,
+            tenant_id=tenant_id,
+            limit=limit,
+            offset=offset,
+            enabled=enabled,
+        )
+        
+        return {
+            "items": items,
+            "meta": build_pagination_meta(limit, offset, total)
+        }
+    
+    @app.get(
+        "/splitters/{splitter_id}",
+        response_model=SplitterConfig,
+        tags=["splitters"],
+        summary="Get splitter",
+        description="Get details of a specific splitter by ID.",
+    )
+    async def get_splitter(
+        request: Request,
+        splitter_id: str = PathParam(..., description="Splitter ID"),
+        tenant_ctx: Dict[str, str] = Depends(require_key),
+        session: AsyncSession = Depends(get_session),
+    ) -> SplitterConfig:
+        """Get a splitter by ID."""
+        tenant_id = tenant_ctx["tenant"]
+        
+        splitter = await splitter_service.get_splitter(
+            db=session,
+            tenant_id=tenant_id,
+            splitter_id=splitter_id,
+        )
+        
+        if not splitter:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"code": "SPLITTER_NOT_FOUND", "message": f"Splitter '{splitter_id}' not found"}
+            )
+        
+        return splitter
+    
+    @app.patch(
+        "/splitters/{splitter_id}",
+        response_model=SplitterConfig,
+        tags=["splitters"],
+        summary="Update splitter",
+        description="Update an existing splitter's configuration.",
+    )
+    async def update_splitter(
+        request: Request,
+        splitter_id: str = PathParam(..., description="Splitter ID"),
+        payload: UpdateSplitterRequest = Body(...),
+        tenant_ctx: Dict[str, str] = Depends(require_key),
+        session: AsyncSession = Depends(get_session),
+    ) -> SplitterConfig:
+        """Update a splitter."""
+        tenant_id = tenant_ctx["tenant"]
+        
+        splitter = await splitter_service.update_splitter(
+            db=session,
+            tenant_id=tenant_id,
+            splitter_id=splitter_id,
+            request=payload,
+        )
+        
+        if not splitter:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"code": "SPLITTER_NOT_FOUND", "message": f"Splitter '{splitter_id}' not found"}
+            )
+        
+        logger.info(
+            "Splitter updated",
+            extra={
+                "context": {
+                    "splitter_id": splitter.splitter_id,
+                    "splitter_name": splitter.name,
+                    "tenant_id": tenant_id,
+                }
+            }
+        )
+        
+        return splitter
+    
+    @app.delete(
+        "/splitters/{splitter_id}",
+        status_code=status.HTTP_204_NO_CONTENT,
+        tags=["splitters"],
+        summary="Delete splitter",
+        description="Delete a splitter permanently.",
+    )
+    async def delete_splitter(
+        request: Request,
+        splitter_id: str = PathParam(..., description="Splitter ID"),
+        tenant_ctx: Dict[str, str] = Depends(require_key),
+        session: AsyncSession = Depends(get_session),
+    ):
+        """Delete a splitter."""
+        tenant_id = tenant_ctx["tenant"]
+        
+        deleted = await splitter_service.delete_splitter(
+            db=session,
+            tenant_id=tenant_id,
+            splitter_id=splitter_id,
+        )
+        
+        if not deleted:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"code": "SPLITTER_NOT_FOUND", "message": f"Splitter '{splitter_id}' not found"}
+            )
+        
+        logger.info(
+            "Splitter deleted",
+            extra={
+                "context": {
+                    "splitter_id": splitter_id,
+                    "tenant_id": tenant_id,
+                }
+            }
+        )
+        
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    # === PHASE 2: Regex Extraction Endpoint ===
+    
+    @app.post(
+        "/extract/regex",
+        tags=["extraction"],
+        summary="Extract fields using regex patterns",
+        description="Extract structured data from text using regex patterns defined in an extraction schema.",
+    )
+    async def extract_with_regex(
+        request: Request,
+        schema_id: str = Body(..., description="ID of the extraction schema to use"),
+        text: str = Body(..., description="Text content to extract from"),
+        extractor_id: Optional[str] = Body(None, description="Optional specific extractor configuration to use"),
+        tenant_ctx: Dict[str, str] = Depends(require_key),
+        session: AsyncSession = Depends(get_session),
+    ):
+        """
+        Extract structured fields from text using regex patterns.
+        
+        Uses extraction schemas to define fields and patterns for extraction.
+        Returns extracted values with confidence scores and citations.
+        """
+        from core.config import build_error_response
+        from document_processing.services import regex_extractor_service
+        
+        tenant_id = tenant_ctx["tenant"]
+        
+        try:
+            result = await regex_extractor_service.extract_with_schema(
+                db=session,
+                tenant_id=tenant_id,
+                schema_id=schema_id,
+                text=text,
+                extractor_id=extractor_id
+            )
+            
+            logger.info(
+                "Regex extraction completed",
+                extra={
+                    "context": {
+                        "schema_id": schema_id,
+                        "extractor_id": extractor_id,
+                        "extracted_count": result["extracted_count"],
+                        "total_fields": result["total_fields"],
+                        "tenant_id": tenant_id,
+                    }
+                }
+            )
+            
+            return result
+            
+        except ValueError as e:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=build_error_response("resource_not_found", str(e))
+            )
+        except Exception as e:
+            logger.error(
+                "Regex extraction failed",
+                extra={
+                    "context": {
+                        "schema_id": schema_id,
+                        "error": str(e),
+                        "tenant_id": tenant_id,
+                    }
+                },
+                exc_info=True
+            )
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=build_error_response("extraction_error", f"Extraction failed: {str(e)}")
+            )
+
+    # === PHASE 3: Classification Endpoint ===
+    
+    @app.post(
+        "/classify",
+        tags=["classification"],
+        summary="Classify document text",
+        description="Classify document content into categories using keyword-based classification.",
+    )
+    async def classify_document(
+        request: Request,
+        text: str = Body(..., description="Text content to classify"),
+        classifier_id: Optional[str] = Body(None, description="Optional specific classifier to use"),
+        tenant_ctx: Dict[str, str] = Depends(require_key),
+        session: AsyncSession = Depends(get_session),
+    ):
+        """
+        Classify document text into categories.
+        
+        Uses classifier configurations with keyword matching to determine document categories.
+        Returns classifications with confidence scores and matched keywords.
+        """
+        from core.config import build_error_response
+        from document_processing.services import classification_service
+        
+        tenant_id = tenant_ctx["tenant"]
+        
+        try:
+            result = await classification_service.classify_document(
+                db=session,
+                tenant_id=tenant_id,
+                text=text,
+                classifier_id=classifier_id
+            )
+            
+            logger.info(
+                "Document classification completed",
+                extra={
+                    "context": {
+                        "classifier_id": classifier_id,
+                        "classifiers_used": result["classifiers_used"],
+                        "top_category": result["top_category"],
+                        "classifications_count": len(result["classifications"]),
+                        "tenant_id": tenant_id,
+                    }
+                }
+            )
+            
+            return result
+            
+        except ValueError as e:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=build_error_response("resource_not_found", str(e))
+            )
+        except Exception as e:
+            logger.error(
+                "Document classification failed",
+                extra={
+                    "context": {
+                        "classifier_id": classifier_id,
+                        "error": str(e),
+                        "tenant_id": tenant_id,
+                    }
+                },
+                exc_info=True
+            )
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=build_error_response("classification_error", f"Classification failed: {str(e)}")
+            )
+
+    # === PHASE 3: Splitting Endpoint ===
+    
+    @app.post(
+        "/split",
+        tags=["splitting"],
+        summary="Split document text",
+        description="Split document content into chunks using rule-based splitting strategies.",
+    )
+    async def split_document(
+        request: Request,
+        text: str = Body(..., description="Text content to split"),
+        splitter_id: Optional[str] = Body(None, description="Optional specific splitter to use"),
+        tenant_ctx: Dict[str, str] = Depends(require_key),
+        session: AsyncSession = Depends(get_session),
+    ):
+        """
+        Split document text into chunks.
+        
+        Uses splitter configurations with various strategies (delimiter, pattern, fixed_size, paragraph)
+        to split documents into manageable chunks. Returns chunks with position metadata.
+        """
+        from core.config import build_error_response
+        from document_processing.services import splitting_service
+        
+        tenant_id = tenant_ctx["tenant"]
+        
+        try:
+            result = await splitting_service.split_document(
+                db=session,
+                tenant_id=tenant_id,
+                text=text,
+                splitter_id=splitter_id
+            )
+            
+            logger.info(
+                "Document splitting completed",
+                extra={
+                    "context": {
+                        "splitter_id": result["splitter_id"],
+                        "split_strategy": result["split_strategy"],
+                        "chunk_count": result["chunk_count"],
+                        "original_length": result["original_length"],
+                        "tenant_id": tenant_id,
+                    }
+                }
+            )
+            
+            return result
+            
+        except ValueError as e:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=build_error_response("resource_not_found", str(e))
+            )
+        except Exception as e:
+            logger.error(
+                "Document splitting failed",
+                extra={
+                    "context": {
+                        "splitter_id": splitter_id,
+                        "error": str(e),
+                        "tenant_id": tenant_id,
+                    }
+                },
+                exc_info=True
+            )
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=build_error_response("splitting_error", f"Splitting failed: {str(e)}")
+            )
+
+    # =============================================================================
+    # PHASE 4: File Upload and Parser Run Endpoints
+    # =============================================================================
+
+    @app.post(
+        "/files",
+        response_model=FileUpload,
+        status_code=status.HTTP_201_CREATED,
+        tags=["files"],
+        summary="Upload a file",
+        description="Upload a file for document processing"
+    )
+    async def upload_file_endpoint(
+        request: Request,
+        file: UploadFile = File(..., description="File to upload"),
+        metadata: Optional[Dict[str, Any]] = Body(None, description="Additional file metadata"),
+        tenant_ctx: Dict[str, str] = Depends(require_key)
+    ) -> FileUpload:
+        """Upload a file and store it for processing."""
+        tenant_id = tenant_ctx["tenant"]
+        
+        try:
+            logger.info(
+                "File upload started",
+                extra={
+                    "context": {
+                        "filename": file.filename,
+                        "content_type": file.content_type,
+                        "tenant_id": tenant_id,
+                    }
+                }
+            )
+            
+            async with request.app.state.db_session() as session:
+                file_upload = await file_service.upload_file(
+                    session, tenant_id, file, metadata
+                )
+                
+                logger.info(
+                    "File uploaded successfully",
+                    extra={
+                        "context": {
+                            "file_id": file_upload.file_id,
+                            "filename": file_upload.filename,
+                            "size_bytes": file_upload.size_bytes,
+                            "tenant_id": tenant_id,
+                        }
+                    }
+                )
+                
+                return file_upload
+                
+        except Exception as e:
+            logger.error(
+                "File upload failed",
+                extra={
+                    "context": {
+                        "filename": file.filename if file else None,
+                        "error": str(e),
+                        "tenant_id": tenant_id,
+                    }
+                },
+                exc_info=True
+            )
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=build_error_response("upload_error", f"File upload failed: {str(e)}")
+            )
+
+    @app.get(
+        "/files",
+        response_model=Dict[str, Any],
+        tags=["files"],
+        summary="List files",
+        description="List uploaded files with pagination"
+    )
+    async def list_files_endpoint(
+        request: Request,
+        limit: int = Query(50, ge=1, le=100, description="Maximum number of results"),
+        offset: int = Query(0, ge=0, description="Number of results to skip"),
+        tenant_ctx: Dict[str, str] = Depends(require_key)
+    ) -> Dict[str, Any]:
+        """List files for the tenant."""
+        tenant_id = tenant_ctx["tenant"]
+        
+        async with request.app.state.db_session() as session:
+            files, total = await file_service.list_files(session, tenant_id, limit, offset)
+            
+            meta = build_pagination_meta(limit, offset, total)
+            
+            return {
+                "items": [f.model_dump() for f in files],
+                "meta": meta
+            }
+
+    @app.get(
+        "/files/{file_id}",
+        response_model=FileUpload,
+        tags=["files"],
+        summary="Get file",
+        description="Get file metadata by ID"
+    )
+    async def get_file_endpoint(
+        request: Request,
+        file_id: str = PathParam(..., description="File ID"),
+        tenant_ctx: Dict[str, str] = Depends(require_key)
+    ) -> FileUpload:
+        """Get file metadata."""
+        tenant_id = tenant_ctx["tenant"]
+        
+        async with request.app.state.db_session() as session:
+            file_db = await file_service.get_file(session, tenant_id, file_id)
+            
+            if not file_db:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=build_error_response("FILE_NOT_FOUND", f"File not found: {file_id}")
+                )
+            
+            return FileUpload(
+                file_id=file_db.id,
+                filename=file_db.filename,
+                content_type=file_db.content_type,
+                size_bytes=file_db.size_bytes,
+                checksum=file_db.checksum,
+                tenant_id=file_db.tenant_id,
+                created_at=file_db.created_at,
+                metadata=file_db.file_metadata
+            )
+
+    @app.delete(
+        "/files/{file_id}",
+        status_code=status.HTTP_200_OK,
+        tags=["files"],
+        summary="Delete file",
+        description="Soft delete a file"
+    )
+    async def delete_file_endpoint(
+        request: Request,
+        file_id: str = PathParam(..., description="File ID"),
+        tenant_ctx: Dict[str, str] = Depends(require_key)
+    ) -> Dict[str, str]:
+        """Soft delete a file."""
+        tenant_id = tenant_ctx["tenant"]
+        
+        async with request.app.state.db_session() as session:
+            deleted = await file_service.delete_file(session, tenant_id, file_id)
+            
+            if not deleted:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=build_error_response("FILE_NOT_FOUND", f"File not found: {file_id}")
+                )
+            
+            return {"message": "File deleted"}
+
+    @app.post(
+        "/parse",
+        response_model=ParseResult,
+        status_code=status.HTTP_200_OK,
+        tags=["parsing"],
+        summary="Parse document (sync)",
+        description="Synchronously parse a document with classification, splitting, and extraction"
+    )
+    async def parse_document_sync(
+        request: Request,
+        parse_request: ParserRunRequest,
+        tenant_ctx: Dict[str, str] = Depends(require_key)
+    ) -> ParseResult:
+        """Parse a document synchronously."""
+        tenant_id = tenant_ctx["tenant"]
+        
+        try:
+            logger.info(
+                "Synchronous parse started",
+                extra={
+                    "context": {
+                        "file_id": parse_request.file_id,
+                        "schema_id": parse_request.schema_id,
+                        "tenant_id": tenant_id,
+                    }
+                }
+            )
+            
+            async with request.app.state.db_session() as session:
+                # Create run
+                run_status = await parser_service.create_parser_run(
+                    session,
+                    tenant_id,
+                    parse_request.file_id,
+                    parse_request.schema_id,
+                    parse_request.extractor_id,
+                    parse_request.classifier_id,
+                    parse_request.splitter_id,
+                    parse_request.metadata
+                )
+                
+                # Execute immediately
+                result = await parser_service.execute_parser_run(
+                    session, tenant_id, run_status.run_id
+                )
+                
+                logger.info(
+                    "Parse completed",
+                    extra={
+                        "context": {
+                            "run_id": result.run_id,
+                            "status": result.status,
+                            "processing_time_ms": result.processing_time_ms,
+                            "tenant_id": tenant_id,
+                        }
+                    }
+                )
+                
+                return result
+                
+        except ValueError as e:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=build_error_response("resource_not_found", str(e))
+            )
+        except Exception as e:
+            logger.error(
+                "Parse failed",
+                extra={
+                    "context": {
+                        "file_id": parse_request.file_id,
+                        "error": str(e),
+                        "tenant_id": tenant_id,
+                    }
+                },
+                exc_info=True
+            )
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=build_error_response("parse_error", f"Parse failed: {str(e)}")
+            )
+
+    @app.post(
+        "/parse/async",
+        response_model=ParserRunStatus,
+        status_code=status.HTTP_202_ACCEPTED,
+        tags=["parsing"],
+        summary="Parse document (async)",
+        description="Create an asynchronous parser run (execution happens in background)"
+    )
+    async def parse_document_async(
+        request: Request,
+        parse_request: ParserRunRequest,
+        tenant_ctx: Dict[str, str] = Depends(require_key)
+    ) -> ParserRunStatus:
+        """Create an async parser run (actual execution would happen in background worker)."""
+        tenant_id = tenant_ctx["tenant"]
+        
+        try:
+            async with request.app.state.db_session() as session:
+                run_status = await parser_service.create_parser_run(
+                    session,
+                    tenant_id,
+                    parse_request.file_id,
+                    parse_request.schema_id,
+                    parse_request.extractor_id,
+                    parse_request.classifier_id,
+                    parse_request.splitter_id,
+                    parse_request.metadata
+                )
+                
+                logger.info(
+                    "Async parse created",
+                    extra={
+                        "context": {
+                            "run_id": run_status.run_id,
+                            "file_id": parse_request.file_id,
+                            "tenant_id": tenant_id,
+                        }
+                    }
+                )
+                
+                # In production, would trigger background job here
+                # For now, just return the pending status
+                
+                return run_status
+                
+        except ValueError as e:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=build_error_response("resource_not_found", str(e))
+            )
+        except Exception as e:
+            logger.error(
+                "Async parse creation failed",
+                extra={
+                    "context": {
+                        "file_id": parse_request.file_id,
+                        "error": str(e),
+                        "tenant_id": tenant_id,
+                    }
+                },
+                exc_info=True
+            )
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=build_error_response("parse_error", f"Parse creation failed: {str(e)}")
+            )
+
+    @app.get(
+        "/parse/{run_id}",
+        response_model=ParserRunStatus,
+        tags=["parsing"],
+        summary="Get parser run status",
+        description="Get the status of a parser run"
+    )
+    async def get_parser_run_endpoint(
+        request: Request,
+        run_id: str = PathParam(..., description="Parser run ID"),
+        tenant_ctx: Dict[str, str] = Depends(require_key)
+    ) -> ParserRunStatus:
+        """Get parser run status."""
+        tenant_id = tenant_ctx["tenant"]
+        
+        async with request.app.state.db_session() as session:
+            run_status = await parser_service.get_parser_run(session, tenant_id, run_id)
+            
+            if not run_status:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=build_error_response("RUN_NOT_FOUND", f"Parser run not found: {run_id}")
+                )
+            
+            return run_status
+
+    @app.get(
+        "/parse",
+        response_model=Dict[str, Any],
+        tags=["parsing"],
+        summary="List parser runs",
+        description="List parser runs with optional filtering"
+    )
+    async def list_parser_runs_endpoint(
+        request: Request,
+        file_id: Optional[str] = Query(None, description="Filter by file ID"),
+        status_filter: Optional[str] = Query(None, alias="status", description="Filter by status"),
+        limit: int = Query(50, ge=1, le=100, description="Maximum number of results"),
+        offset: int = Query(0, ge=0, description="Number of results to skip"),
+        tenant_ctx: Dict[str, str] = Depends(require_key)
+    ) -> Dict[str, Any]:
+        """List parser runs."""
+        tenant_id = tenant_ctx["tenant"]
+        
+        async with request.app.state.db_session() as session:
+            runs, total = await parser_service.list_parser_runs(
+                session, tenant_id, file_id, status_filter, limit, offset
+            )
+            
+            meta = build_pagination_meta(limit, offset, total)
+            
+            return {
+                "items": [r.model_dump() for r in runs],
+                "meta": meta
+            }
+
+    # =============================================================================
+    # PHASE 5: LLM Processing Endpoints
+    # =============================================================================
+
+    @app.post(
+        "/llm/summarize",
+        response_model=Dict[str, Any],
+        tags=["llm"],
+        summary="Summarize document",
+        description="Generate a summary of document text using LLM"
+    )
+    async def llm_summarize(
+        request: Request,
+        text: str = Body(..., description="Text to summarize"),
+        max_length: int = Body(500, description="Maximum summary length"),
+        style: str = Body("concise", description="Summary style: concise, detailed, bullet_points"),
+        tenant_ctx: Dict[str, str] = Depends(require_key)
+    ) -> Dict[str, Any]:
+        """Generate document summary using LLM."""
+        try:
+            from document_processing.services.llm_service import llm_service
+            
+            result = await llm_service.summarize(text, max_length, style)
+            
+            return result
+            
+        except Exception as e:
+            logger.error(
+                "LLM summarization failed",
+                extra={"context": {"error": str(e)}},
+                exc_info=True
+            )
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=build_error_response("llm_error", f"Summarization failed: {str(e)}")
+            )
+
+    @app.post(
+        "/llm/extract-entities",
+        response_model=Dict[str, Any],
+        tags=["llm"],
+        summary="Extract entities",
+        description="Extract named entities from text using LLM"
+    )
+    async def llm_extract_entities(
+        request: Request,
+        text: str = Body(..., description="Text to analyze"),
+        entity_types: Optional[List[str]] = Body(None, description="Entity types to extract"),
+        tenant_ctx: Dict[str, str] = Depends(require_key)
+    ) -> Dict[str, Any]:
+        """Extract named entities using LLM."""
+        try:
+            from document_processing.services.llm_service import llm_service
+            
+            result = await llm_service.extract_entities(text, entity_types)
+            
+            return result
+            
+        except Exception as e:
+            logger.error(
+                "LLM entity extraction failed",
+                extra={"context": {"error": str(e)}},
+                exc_info=True
+            )
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=build_error_response("llm_error", f"Entity extraction failed: {str(e)}")
+            )
+
+    @app.post(
+        "/llm/answer-questions",
+        response_model=Dict[str, Any],
+        tags=["llm"],
+        summary="Answer questions about document",
+        description="Answer questions about document content using LLM"
+    )
+    async def llm_answer_questions(
+        request: Request,
+        text: str = Body(..., description="Document text"),
+        questions: List[str] = Body(..., description="Questions to answer"),
+        tenant_ctx: Dict[str, str] = Depends(require_key)
+    ) -> Dict[str, Any]:
+        """Answer questions about document using LLM."""
+        try:
+            from document_processing.services.llm_service import llm_service
+            
+            result = await llm_service.answer_questions(text, questions)
+            
+            return result
+            
+        except Exception as e:
+            logger.error(
+                "LLM question answering failed",
+                extra={"context": {"error": str(e)}},
+                exc_info=True
+            )
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=build_error_response("llm_error", f"Question answering failed: {str(e)}")
+            )
+
+    # =============================================================================
+    # Original Legacy Endpoints
+    # =============================================================================
 
     # File upload endpoint (protected)
     @app.post(
@@ -1462,6 +3105,809 @@ def build_api() -> FastAPI:
         )
 
         return Response(status_code=204)
+
+    # ======================
+    # PHASE 7: Processors, Workflows, Evaluation Sets
+    # ======================
+
+    @app.post(
+        "/processors",
+        response_model=ProcessorConfig,
+        status_code=status.HTTP_201_CREATED,
+        tags=["processors"],
+        summary="Create processor",
+        description="Create a new custom processor plugin",
+    )
+    async def create_processor_endpoint(
+        request: CreateProcessorRequest,
+        tenant_ctx: dict = Depends(require_key),
+        db: AsyncSession = Depends(get_session),
+    ):
+        """Create a new processor."""
+        try:
+            processor = await processor_service.create_processor(
+                session=db,
+                tenant_id=tenant_ctx["tenant"],
+                name=request.name,
+                processor_type=request.processor_type,
+                implementation=request.implementation,
+                description=request.description,
+                input_schema=request.input_schema,
+                output_schema=request.output_schema,
+                enabled=request.enabled,
+                metadata=request.metadata
+            )
+            
+            return ProcessorConfig(
+                processor_id=processor.id,
+                name=processor.name,
+                description=processor.description,
+                processor_type=processor.processor_type,
+                implementation=processor.implementation,
+                input_schema=processor.input_schema,
+                output_schema=processor.output_schema,
+                enabled=processor.enabled,
+                version=processor.version,
+                tenant_id=processor.tenant_id,
+                created_at=processor.created_at,
+                updated_at=processor.updated_at,
+                metadata=processor.processor_metadata
+            )
+        except ValueError as e:
+            return JSONResponse(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                content=build_error_response("DUPLICATE_NAME", str(e))
+            )
+        except Exception as e:
+            logger.error(f"Error creating processor: {e}", exc_info=True)
+            return JSONResponse(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                content=build_error_response("CREATION_ERROR", "Failed to create processor")
+            )
+
+    @app.get(
+        "/processors",
+        response_model=ProcessorListResponse,
+        tags=["processors"],
+        summary="List processors",
+        description="List all processors with pagination and filtering",
+    )
+    async def list_processors_endpoint(
+        limit: int = Query(50, ge=1, le=100),
+        offset: int = Query(0, ge=0),
+        processor_type: Optional[str] = Query(None),
+        enabled: Optional[bool] = Query(None),
+        tenant_ctx: dict = Depends(require_key),
+        db: AsyncSession = Depends(get_session),
+    ):
+        """List processors with pagination."""
+        try:
+            items, total = await processor_service.list_processors(
+                session=db,
+                tenant_id=tenant_ctx["tenant"],
+                limit=limit,
+                offset=offset,
+                processor_type=processor_type,
+                enabled=enabled
+            )
+            
+            processors = [
+                ProcessorConfig(
+                    processor_id=p.id,
+                    name=p.name,
+                    description=p.description,
+                    processor_type=p.processor_type,
+                    implementation=p.implementation,
+                    input_schema=p.input_schema,
+                    output_schema=p.output_schema,
+                    enabled=p.enabled,
+                    version=p.version,
+                    tenant_id=p.tenant_id,
+                    created_at=p.created_at,
+                    updated_at=p.updated_at,
+                    metadata=p.processor_metadata
+                )
+                for p in items
+            ]
+            
+            return ProcessorListResponse(
+                items=processors,
+                meta=build_pagination_meta(limit, offset, total)
+            )
+        except Exception as e:
+            logger.error(f"Error listing processors: {e}", exc_info=True)
+            return JSONResponse(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                content=build_error_response("LIST_ERROR", "Failed to list processors")
+            )
+
+    @app.get(
+        "/processors/{processor_id}",
+        response_model=ProcessorConfig,
+        tags=["processors"],
+        summary="Get processor",
+        description="Get processor by ID",
+    )
+    async def get_processor_endpoint(
+        processor_id: str = PathParam(...),
+        tenant_ctx: dict = Depends(require_key),
+        db: AsyncSession = Depends(get_session),
+    ):
+        """Get processor by ID."""
+        try:
+            processor = await processor_service.get_processor(
+                session=db,
+                tenant_id=tenant_ctx["tenant"],
+                processor_id=processor_id
+            )
+            
+            if not processor:
+                return JSONResponse(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    content=build_error_response("NOT_FOUND", f"Processor {processor_id} not found")
+                )
+            
+            return ProcessorConfig(
+                processor_id=processor.id,
+                name=processor.name,
+                description=processor.description,
+                processor_type=processor.processor_type,
+                implementation=processor.implementation,
+                input_schema=processor.input_schema,
+                output_schema=processor.output_schema,
+                enabled=processor.enabled,
+                version=processor.version,
+                tenant_id=processor.tenant_id,
+                created_at=processor.created_at,
+                updated_at=processor.updated_at,
+                metadata=processor.processor_metadata
+            )
+        except Exception as e:
+            logger.error(f"Error getting processor: {e}", exc_info=True)
+            return JSONResponse(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                content=build_error_response("GET_ERROR", "Failed to get processor")
+            )
+
+    @app.put(
+        "/processors/{processor_id}",
+        response_model=ProcessorConfig,
+        tags=["processors"],
+        summary="Update processor",
+        description="Update processor by ID",
+    )
+    async def update_processor_endpoint(
+        processor_id: str = PathParam(...),
+        request: UpdateProcessorRequest = None,
+        tenant_ctx: dict = Depends(require_key),
+        db: AsyncSession = Depends(get_session),
+    ):
+        """Update processor."""
+        try:
+            processor = await processor_service.update_processor(
+                session=db,
+                tenant_id=tenant_ctx["tenant"],
+                processor_id=processor_id,
+                name=request.name,
+                description=request.description,
+                processor_type=request.processor_type,
+                implementation=request.implementation,
+                input_schema=request.input_schema,
+                output_schema=request.output_schema,
+                enabled=request.enabled,
+                metadata=request.metadata
+            )
+            
+            if not processor:
+                return JSONResponse(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    content=build_error_response("NOT_FOUND", f"Processor {processor_id} not found")
+                )
+            
+            return ProcessorConfig(
+                processor_id=processor.id,
+                name=processor.name,
+                description=processor.description,
+                processor_type=processor.processor_type,
+                implementation=processor.implementation,
+                input_schema=processor.input_schema,
+                output_schema=processor.output_schema,
+                enabled=processor.enabled,
+                version=processor.version,
+                tenant_id=processor.tenant_id,
+                created_at=processor.created_at,
+                updated_at=processor.updated_at,
+                metadata=processor.processor_metadata
+            )
+        except ValueError as e:
+            return JSONResponse(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                content=build_error_response("DUPLICATE_NAME", str(e))
+            )
+        except Exception as e:
+            logger.error(f"Error updating processor: {e}", exc_info=True)
+            return JSONResponse(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                content=build_error_response("UPDATE_ERROR", "Failed to update processor")
+            )
+
+    @app.delete(
+        "/processors/{processor_id}",
+        status_code=status.HTTP_204_NO_CONTENT,
+        tags=["processors"],
+        summary="Delete processor",
+        description="Soft delete processor by ID",
+    )
+    async def delete_processor_endpoint(
+        processor_id: str = PathParam(...),
+        tenant_ctx: dict = Depends(require_key),
+        db: AsyncSession = Depends(get_session),
+    ):
+        """Delete processor."""
+        try:
+            deleted = await processor_service.delete_processor(
+                session=db,
+                tenant_id=tenant_ctx["tenant"],
+                processor_id=processor_id
+            )
+            
+            if not deleted:
+                return JSONResponse(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    content=build_error_response("NOT_FOUND", f"Processor {processor_id} not found")
+                )
+            
+            return Response(status_code=status.HTTP_204_NO_CONTENT)
+        except Exception as e:
+            logger.error(f"Error deleting processor: {e}", exc_info=True)
+            return JSONResponse(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                content=build_error_response("DELETE_ERROR", "Failed to delete processor")
+            )
+
+    # Workflow endpoints
+    @app.post(
+        "/workflows",
+        response_model=WorkflowConfig,
+        status_code=status.HTTP_201_CREATED,
+        tags=["workflows"],
+        summary="Create workflow",
+        description="Create a new workflow (chain of processors)",
+    )
+    async def create_workflow_endpoint(
+        request: CreateWorkflowRequest,
+        tenant_ctx: dict = Depends(require_key),
+        db: AsyncSession = Depends(get_session),
+    ):
+        """Create a new workflow."""
+        try:
+            workflow = await workflow_service.create_workflow(
+                session=db,
+                tenant_id=tenant_ctx["tenant"],
+                name=request.name,
+                steps=request.steps,
+                description=request.description,
+                enabled=request.enabled,
+                metadata=request.metadata
+            )
+            
+            return WorkflowConfig(
+                workflow_id=workflow.id,
+                name=workflow.name,
+                description=workflow.description,
+                steps=workflow.steps,
+                enabled=workflow.enabled,
+                version=workflow.version,
+                tenant_id=workflow.tenant_id,
+                created_at=workflow.created_at,
+                updated_at=workflow.updated_at,
+                metadata=workflow.workflow_metadata
+            )
+        except ValueError as e:
+            return JSONResponse(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                content=build_error_response("VALIDATION_ERROR", str(e))
+            )
+        except Exception as e:
+            logger.error(f"Error creating workflow: {e}", exc_info=True)
+            return JSONResponse(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                content=build_error_response("CREATION_ERROR", "Failed to create workflow")
+            )
+
+    @app.get(
+        "/workflows",
+        response_model=WorkflowListResponse,
+        tags=["workflows"],
+        summary="List workflows",
+        description="List all workflows with pagination",
+    )
+    async def list_workflows_endpoint(
+        limit: int = Query(50, ge=1, le=100),
+        offset: int = Query(0, ge=0),
+        enabled: Optional[bool] = Query(None),
+        tenant_ctx: dict = Depends(require_key),
+        db: AsyncSession = Depends(get_session),
+    ):
+        """List workflows with pagination."""
+        try:
+            items, total = await workflow_service.list_workflows(
+                session=db,
+                tenant_id=tenant_ctx["tenant"],
+                limit=limit,
+                offset=offset,
+                enabled=enabled
+            )
+            
+            workflows = [
+                WorkflowConfig(
+                    workflow_id=w.id,
+                    name=w.name,
+                    description=w.description,
+                    steps=w.steps,
+                    enabled=w.enabled,
+                    version=w.version,
+                    tenant_id=w.tenant_id,
+                    created_at=w.created_at,
+                    updated_at=w.updated_at,
+                    metadata=w.workflow_metadata
+                )
+                for w in items
+            ]
+            
+            return WorkflowListResponse(
+                items=workflows,
+                meta=build_pagination_meta(limit, offset, total)
+            )
+        except Exception as e:
+            logger.error(f"Error listing workflows: {e}", exc_info=True)
+            return JSONResponse(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                content=build_error_response("LIST_ERROR", "Failed to list workflows")
+            )
+
+    @app.get(
+        "/workflows/{workflow_id}",
+        response_model=WorkflowConfig,
+        tags=["workflows"],
+        summary="Get workflow",
+        description="Get workflow by ID",
+    )
+    async def get_workflow_endpoint(
+        workflow_id: str = PathParam(...),
+        tenant_ctx: dict = Depends(require_key),
+        db: AsyncSession = Depends(get_session),
+    ):
+        """Get workflow by ID."""
+        try:
+            workflow = await workflow_service.get_workflow(
+                session=db,
+                tenant_id=tenant_ctx["tenant"],
+                workflow_id=workflow_id
+            )
+            
+            if not workflow:
+                return JSONResponse(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    content=build_error_response("NOT_FOUND", f"Workflow {workflow_id} not found")
+                )
+            
+            return WorkflowConfig(
+                workflow_id=workflow.id,
+                name=workflow.name,
+                description=workflow.description,
+                steps=workflow.steps,
+                enabled=workflow.enabled,
+                version=workflow.version,
+                tenant_id=workflow.tenant_id,
+                created_at=workflow.created_at,
+                updated_at=workflow.updated_at,
+                metadata=workflow.workflow_metadata
+            )
+        except Exception as e:
+            logger.error(f"Error getting workflow: {e}", exc_info=True)
+            return JSONResponse(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                content=build_error_response("GET_ERROR", "Failed to get workflow")
+            )
+
+    @app.put(
+        "/workflows/{workflow_id}",
+        response_model=WorkflowConfig,
+        tags=["workflows"],
+        summary="Update workflow",
+        description="Update workflow by ID",
+    )
+    async def update_workflow_endpoint(
+        workflow_id: str = PathParam(...),
+        request: UpdateWorkflowRequest = None,
+        tenant_ctx: dict = Depends(require_key),
+        db: AsyncSession = Depends(get_session),
+    ):
+        """Update workflow."""
+        try:
+            workflow = await workflow_service.update_workflow(
+                session=db,
+                tenant_id=tenant_ctx["tenant"],
+                workflow_id=workflow_id,
+                name=request.name,
+                description=request.description,
+                steps=request.steps,
+                enabled=request.enabled,
+                metadata=request.metadata
+            )
+            
+            if not workflow:
+                return JSONResponse(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    content=build_error_response("NOT_FOUND", f"Workflow {workflow_id} not found")
+                )
+            
+            return WorkflowConfig(
+                workflow_id=workflow.id,
+                name=workflow.name,
+                description=workflow.description,
+                steps=workflow.steps,
+                enabled=workflow.enabled,
+                version=workflow.version,
+                tenant_id=workflow.tenant_id,
+                created_at=workflow.created_at,
+                updated_at=workflow.updated_at,
+                metadata=workflow.workflow_metadata
+            )
+        except ValueError as e:
+            return JSONResponse(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                content=build_error_response("VALIDATION_ERROR", str(e))
+            )
+        except Exception as e:
+            logger.error(f"Error updating workflow: {e}", exc_info=True)
+            return JSONResponse(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                content=build_error_response("UPDATE_ERROR", "Failed to update workflow")
+            )
+
+    @app.delete(
+        "/workflows/{workflow_id}",
+        status_code=status.HTTP_204_NO_CONTENT,
+        tags=["workflows"],
+        summary="Delete workflow",
+        description="Soft delete workflow by ID",
+    )
+    async def delete_workflow_endpoint(
+        workflow_id: str = PathParam(...),
+        tenant_ctx: dict = Depends(require_key),
+        db: AsyncSession = Depends(get_session),
+    ):
+        """Delete workflow."""
+        try:
+            deleted = await workflow_service.delete_workflow(
+                session=db,
+                tenant_id=tenant_ctx["tenant"],
+                workflow_id=workflow_id
+            )
+            
+            if not deleted:
+                return JSONResponse(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    content=build_error_response("NOT_FOUND", f"Workflow {workflow_id} not found")
+                )
+            
+            return Response(status_code=status.HTTP_204_NO_CONTENT)
+        except Exception as e:
+            logger.error(f"Error deleting workflow: {e}", exc_info=True)
+            return JSONResponse(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                content=build_error_response("DELETE_ERROR", "Failed to delete workflow")
+            )
+
+    @app.post(
+        "/workflows/{workflow_id}/execute",
+        response_model=WorkflowExecutionResult,
+        tags=["workflows"],
+        summary="Execute workflow",
+        description="Execute a workflow with input data",
+    )
+    async def execute_workflow_endpoint(
+        workflow_id: str = PathParam(...),
+        request: ExecuteWorkflowRequest = None,
+        tenant_ctx: dict = Depends(require_key),
+        db: AsyncSession = Depends(get_session),
+    ):
+        """Execute workflow."""
+        try:
+            result = await workflow_service.execute_workflow(
+                session=db,
+                tenant_id=tenant_ctx["tenant"],
+                workflow_id=workflow_id,
+                input_data=request.input_data
+            )
+            
+            return WorkflowExecutionResult(**result)
+        except ValueError as e:
+            return JSONResponse(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                content=build_error_response("EXECUTION_ERROR", str(e))
+            )
+        except Exception as e:
+            logger.error(f"Error executing workflow: {e}", exc_info=True)
+            return JSONResponse(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                content=build_error_response("EXECUTION_ERROR", "Failed to execute workflow")
+            )
+
+    # Evaluation set endpoints
+    @app.post(
+        "/evaluation-sets",
+        response_model=EvaluationSetConfig,
+        status_code=status.HTTP_201_CREATED,
+        tags=["evaluation"],
+        summary="Create evaluation set",
+        description="Create a new evaluation set for testing",
+    )
+    async def create_evaluation_set_endpoint(
+        request: CreateEvaluationSetRequest,
+        tenant_ctx: dict = Depends(require_key),
+        db: AsyncSession = Depends(get_session),
+    ):
+        """Create a new evaluation set."""
+        try:
+            eval_set = await evaluation_service.create_evaluation_set(
+                session=db,
+                tenant_id=tenant_ctx["tenant"],
+                name=request.name,
+                test_cases=request.test_cases,
+                target_type=request.target_type,
+                description=request.description,
+                target_id=request.target_id,
+                metadata=request.metadata
+            )
+            
+            return EvaluationSetConfig(
+                evaluation_set_id=eval_set.id,
+                name=eval_set.name,
+                description=eval_set.description,
+                test_cases=eval_set.test_cases,
+                target_type=eval_set.target_type,
+                target_id=eval_set.target_id,
+                tenant_id=eval_set.tenant_id,
+                created_at=eval_set.created_at,
+                updated_at=eval_set.updated_at,
+                metadata=eval_set.evaluation_metadata
+            )
+        except ValueError as e:
+            return JSONResponse(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                content=build_error_response("VALIDATION_ERROR", str(e))
+            )
+        except Exception as e:
+            logger.error(f"Error creating evaluation set: {e}", exc_info=True)
+            return JSONResponse(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                content=build_error_response("CREATION_ERROR", "Failed to create evaluation set")
+            )
+
+    @app.get(
+        "/evaluation-sets",
+        response_model=EvaluationSetListResponse,
+        tags=["evaluation"],
+        summary="List evaluation sets",
+        description="List all evaluation sets with pagination",
+    )
+    async def list_evaluation_sets_endpoint(
+        limit: int = Query(50, ge=1, le=100),
+        offset: int = Query(0, ge=0),
+        target_type: Optional[str] = Query(None),
+        target_id: Optional[str] = Query(None),
+        tenant_ctx: dict = Depends(require_key),
+        db: AsyncSession = Depends(get_session),
+    ):
+        """List evaluation sets with pagination."""
+        try:
+            items, total = await evaluation_service.list_evaluation_sets(
+                session=db,
+                tenant_id=tenant_ctx["tenant"],
+                limit=limit,
+                offset=offset,
+                target_type=target_type,
+                target_id=target_id
+            )
+            
+            eval_sets = [
+                EvaluationSetConfig(
+                    evaluation_set_id=e.id,
+                    name=e.name,
+                    description=e.description,
+                    test_cases=e.test_cases,
+                    target_type=e.target_type,
+                    target_id=e.target_id,
+                    tenant_id=e.tenant_id,
+                    created_at=e.created_at,
+                    updated_at=e.updated_at,
+                    metadata=e.evaluation_metadata
+                )
+                for e in items
+            ]
+            
+            return EvaluationSetListResponse(
+                items=eval_sets,
+                meta=build_pagination_meta(limit, offset, total)
+            )
+        except Exception as e:
+            logger.error(f"Error listing evaluation sets: {e}", exc_info=True)
+            return JSONResponse(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                content=build_error_response("LIST_ERROR", "Failed to list evaluation sets")
+            )
+
+    @app.get(
+        "/evaluation-sets/{evaluation_set_id}",
+        response_model=EvaluationSetConfig,
+        tags=["evaluation"],
+        summary="Get evaluation set",
+        description="Get evaluation set by ID",
+    )
+    async def get_evaluation_set_endpoint(
+        evaluation_set_id: str = PathParam(...),
+        tenant_ctx: dict = Depends(require_key),
+        db: AsyncSession = Depends(get_session),
+    ):
+        """Get evaluation set by ID."""
+        try:
+            eval_set = await evaluation_service.get_evaluation_set(
+                session=db,
+                tenant_id=tenant_ctx["tenant"],
+                evaluation_set_id=evaluation_set_id
+            )
+            
+            if not eval_set:
+                return JSONResponse(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    content=build_error_response("NOT_FOUND", f"Evaluation set {evaluation_set_id} not found")
+                )
+            
+            return EvaluationSetConfig(
+                evaluation_set_id=eval_set.id,
+                name=eval_set.name,
+                description=eval_set.description,
+                test_cases=eval_set.test_cases,
+                target_type=eval_set.target_type,
+                target_id=eval_set.target_id,
+                tenant_id=eval_set.tenant_id,
+                created_at=eval_set.created_at,
+                updated_at=eval_set.updated_at,
+                metadata=eval_set.evaluation_metadata
+            )
+        except Exception as e:
+            logger.error(f"Error getting evaluation set: {e}", exc_info=True)
+            return JSONResponse(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                content=build_error_response("GET_ERROR", "Failed to get evaluation set")
+            )
+
+    @app.put(
+        "/evaluation-sets/{evaluation_set_id}",
+        response_model=EvaluationSetConfig,
+        tags=["evaluation"],
+        summary="Update evaluation set",
+        description="Update evaluation set by ID",
+    )
+    async def update_evaluation_set_endpoint(
+        evaluation_set_id: str = PathParam(...),
+        request: UpdateEvaluationSetRequest = None,
+        tenant_ctx: dict = Depends(require_key),
+        db: AsyncSession = Depends(get_session),
+    ):
+        """Update evaluation set."""
+        try:
+            eval_set = await evaluation_service.update_evaluation_set(
+                session=db,
+                tenant_id=tenant_ctx["tenant"],
+                evaluation_set_id=evaluation_set_id,
+                name=request.name,
+                description=request.description,
+                test_cases=request.test_cases,
+                target_type=request.target_type,
+                target_id=request.target_id,
+                metadata=request.metadata
+            )
+            
+            if not eval_set:
+                return JSONResponse(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    content=build_error_response("NOT_FOUND", f"Evaluation set {evaluation_set_id} not found")
+                )
+            
+            return EvaluationSetConfig(
+                evaluation_set_id=eval_set.id,
+                name=eval_set.name,
+                description=eval_set.description,
+                test_cases=eval_set.test_cases,
+                target_type=eval_set.target_type,
+                target_id=eval_set.target_id,
+                tenant_id=eval_set.tenant_id,
+                created_at=eval_set.created_at,
+                updated_at=eval_set.updated_at,
+                metadata=eval_set.evaluation_metadata
+            )
+        except ValueError as e:
+            return JSONResponse(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                content=build_error_response("VALIDATION_ERROR", str(e))
+            )
+        except Exception as e:
+            logger.error(f"Error updating evaluation set: {e}", exc_info=True)
+            return JSONResponse(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                content=build_error_response("UPDATE_ERROR", "Failed to update evaluation set")
+            )
+
+    @app.delete(
+        "/evaluation-sets/{evaluation_set_id}",
+        status_code=status.HTTP_204_NO_CONTENT,
+        tags=["evaluation"],
+        summary="Delete evaluation set",
+        description="Soft delete evaluation set by ID",
+    )
+    async def delete_evaluation_set_endpoint(
+        evaluation_set_id: str = PathParam(...),
+        tenant_ctx: dict = Depends(require_key),
+        db: AsyncSession = Depends(get_session),
+    ):
+        """Delete evaluation set."""
+        try:
+            deleted = await evaluation_service.delete_evaluation_set(
+                session=db,
+                tenant_id=tenant_ctx["tenant"],
+                evaluation_set_id=evaluation_set_id
+            )
+            
+            if not deleted:
+                return JSONResponse(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    content=build_error_response("NOT_FOUND", f"Evaluation set {evaluation_set_id} not found")
+                )
+            
+            return Response(status_code=status.HTTP_204_NO_CONTENT)
+        except Exception as e:
+            logger.error(f"Error deleting evaluation set: {e}", exc_info=True)
+            return JSONResponse(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                content=build_error_response("DELETE_ERROR", "Failed to delete evaluation set")
+            )
+
+    @app.post(
+        "/evaluation-sets/{evaluation_set_id}/run",
+        response_model=EvaluationResult,
+        tags=["evaluation"],
+        summary="Run evaluation",
+        description="Run evaluation set against its target",
+    )
+    async def run_evaluation_endpoint(
+        evaluation_set_id: str = PathParam(...),
+        tenant_ctx: dict = Depends(require_key),
+        db: AsyncSession = Depends(get_session),
+    ):
+        """Run evaluation."""
+        try:
+            result = await evaluation_service.run_evaluation(
+                session=db,
+                tenant_id=tenant_ctx["tenant"],
+                evaluation_set_id=evaluation_set_id
+            )
+            
+            return EvaluationResult(**result)
+        except ValueError as e:
+            return JSONResponse(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                content=build_error_response("EXECUTION_ERROR", str(e))
+            )
+        except Exception as e:
+            logger.error(f"Error running evaluation: {e}", exc_info=True)
+            return JSONResponse(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                content=build_error_response("EXECUTION_ERROR", "Failed to run evaluation")
+            )
 
     return app
 
