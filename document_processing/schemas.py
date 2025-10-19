@@ -267,3 +267,95 @@ DocumentChunk.model_rebuild()
 Citation.model_rebuild()
 ExtractedField.model_rebuild()
 GenericExtractionResult.model_rebuild()
+
+
+# =============================================================================
+# PHASE 4: File and Parser Run Schemas
+# =============================================================================
+
+
+class FileUpload(BaseModel):
+    """Response for uploaded file."""
+    
+    file_id: str = Field(..., description="Unique file identifier")
+    filename: str = Field(..., description="Original filename")
+    content_type: str = Field(..., description="MIME type")
+    size_bytes: int = Field(..., description="File size in bytes")
+    checksum: str = Field(..., description="SHA-256 checksum")
+    tenant_id: str = Field(..., description="Owner tenant ID")
+    created_at: datetime = Field(..., description="Upload timestamp")
+    metadata: Optional[Dict[str, Any]] = Field(None, description="Additional metadata")
+
+
+class ParserRunRequest(BaseModel):
+    """Request to create a parser run."""
+    
+    file_id: str = Field(..., description="File to parse")
+    schema_id: Optional[str] = Field(None, description="Extraction schema to use")
+    extractor_id: Optional[str] = Field(None, description="Extractor to use")
+    classifier_id: Optional[str] = Field(None, description="Classifier to use")
+    splitter_id: Optional[str] = Field(None, description="Splitter to use")
+    metadata: Optional[Dict[str, Any]] = Field(None, description="Additional run metadata")
+
+
+class ParserRunStatus(BaseModel):
+    """Status of a parser run."""
+    
+    run_id: str = Field(..., description="Unique run identifier")
+    file_id: str = Field(..., description="File being parsed")
+    status: Literal["pending", "running", "completed", "failed"] = Field(
+        ..., description="Current status"
+    )
+    tenant_id: str = Field(..., description="Owner tenant ID")
+    
+    # Configuration
+    schema_id: Optional[str] = None
+    extractor_id: Optional[str] = None
+    classifier_id: Optional[str] = None
+    splitter_id: Optional[str] = None
+    
+    # Results
+    classification_result: Optional[Dict[str, Any]] = None
+    split_chunks: Optional[List[Dict[str, Any]]] = None
+    extracted_data: Optional[Dict[str, Any]] = None
+    confidence_score: Optional[int] = None
+    
+    # Timing
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    processing_time_ms: Optional[int] = None
+    
+    # Errors
+    error_message: Optional[str] = None
+    
+    created_at: datetime = Field(..., description="Run creation timestamp")
+    updated_at: datetime = Field(..., description="Last update timestamp")
+    metadata: Optional[Dict[str, Any]] = None
+
+
+class ParseResult(BaseModel):
+    """Complete result of a parse operation."""
+    
+    run_id: str = Field(..., description="Parser run identifier")
+    file_id: str = Field(..., description="File parsed")
+    status: Literal["completed", "failed"] = Field(..., description="Final status")
+    
+    # Results
+    classification: Optional[Dict[str, Any]] = Field(None, description="Classification result")
+    chunks: Optional[List[Dict[str, Any]]] = Field(None, description="Split chunks")
+    extracted: Optional[Dict[str, Any]] = Field(None, description="Extracted data")
+    confidence: Optional[float] = Field(None, description="Overall confidence (0.0-1.0)")
+    
+    # Timing
+    processing_time_ms: int = Field(..., description="Processing duration")
+    completed_at: datetime = Field(..., description="Completion timestamp")
+    
+    # Errors
+    error: Optional[str] = Field(None, description="Error message if failed")
+
+
+# Rebuild new models
+FileUpload.model_rebuild()
+ParserRunRequest.model_rebuild()
+ParserRunStatus.model_rebuild()
+ParseResult.model_rebuild()

@@ -45,11 +45,19 @@ from document_processing.schemas import (
     CreateSplitterRequest,
     UpdateSplitterRequest,
     SplitterConfig,
+    # PHASE 4: File and Parser schemas
+    FileUpload,
+    ParserRunRequest,
+    ParserRunStatus,
+    ParseResult,
 )
 from document_processing.services.schema_service import SchemaService
 from document_processing.services import extractor_service
 from document_processing.services import classifier_service
 from document_processing.services import splitter_service
+from document_processing.services import file_service
+from document_processing.services import parser_service
+from core.config import build_error_response, build_pagination_meta
 
 # Database imports - use direct module references to avoid package conflicts
 from sqlalchemy import select, and_, func
@@ -1613,6 +1621,371 @@ def build_api() -> FastAPI:
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=build_error_response("splitting_error", f"Splitting failed: {str(e)}")
             )
+
+    # =============================================================================
+    # PHASE 4: File Upload and Parser Run Endpoints
+    # =============================================================================
+
+    @app.post(
+        "/files",
+        response_model=FileUpload,
+        status_code=status.HTTP_201_CREATED,
+        tags=["files"],
+        summary="Upload a file",
+        description="Upload a file for document processing"
+    )
+    async def upload_file_endpoint(
+        request: Request,
+        file: UploadFile = File(..., description="File to upload"),
+        metadata: Optional[Dict[str, Any]] = Body(None, description="Additional file metadata"),
+        tenant_ctx: Dict[str, str] = Depends(require_key)
+    ) -> FileUpload:
+        """Upload a file and store it for processing."""
+        tenant_id = tenant_ctx["tenant"]
+        
+        try:
+            logger.info(
+                "File upload started",
+                extra={
+                    "context": {
+                        "filename": file.filename,
+                        "content_type": file.content_type,
+                        "tenant_id": tenant_id,
+                    }
+                }
+            )
+            
+            async with request.app.state.db_session() as session:
+                file_upload = await file_service.upload_file(
+                    session, tenant_id, file, metadata
+                )
+                
+                logger.info(
+                    "File uploaded successfully",
+                    extra={
+                        "context": {
+                            "file_id": file_upload.file_id,
+                            "filename": file_upload.filename,
+                            "size_bytes": file_upload.size_bytes,
+                            "tenant_id": tenant_id,
+                        }
+                    }
+                )
+                
+                return file_upload
+                
+        except Exception as e:
+            logger.error(
+                "File upload failed",
+                extra={
+                    "context": {
+                        "filename": file.filename if file else None,
+                        "error": str(e),
+                        "tenant_id": tenant_id,
+                    }
+                },
+                exc_info=True
+            )
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=build_error_response("upload_error", f"File upload failed: {str(e)}")
+            )
+
+    @app.get(
+        "/files",
+        response_model=Dict[str, Any],
+        tags=["files"],
+        summary="List files",
+        description="List uploaded files with pagination"
+    )
+    async def list_files_endpoint(
+        request: Request,
+        limit: int = Query(50, ge=1, le=100, description="Maximum number of results"),
+        offset: int = Query(0, ge=0, description="Number of results to skip"),
+        tenant_ctx: Dict[str, str] = Depends(require_key)
+    ) -> Dict[str, Any]:
+        """List files for the tenant."""
+        tenant_id = tenant_ctx["tenant"]
+        
+        async with request.app.state.db_session() as session:
+            files, total = await file_service.list_files(session, tenant_id, limit, offset)
+            
+            meta = build_pagination_meta(limit, offset, total)
+            
+            return {
+                "items": [f.model_dump() for f in files],
+                "meta": meta
+            }
+
+    @app.get(
+        "/files/{file_id}",
+        response_model=FileUpload,
+        tags=["files"],
+        summary="Get file",
+        description="Get file metadata by ID"
+    )
+    async def get_file_endpoint(
+        request: Request,
+        file_id: str = PathParam(..., description="File ID"),
+        tenant_ctx: Dict[str, str] = Depends(require_key)
+    ) -> FileUpload:
+        """Get file metadata."""
+        tenant_id = tenant_ctx["tenant"]
+        
+        async with request.app.state.db_session() as session:
+            file_db = await file_service.get_file(session, tenant_id, file_id)
+            
+            if not file_db:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=build_error_response("FILE_NOT_FOUND", f"File not found: {file_id}")
+                )
+            
+            return FileUpload(
+                file_id=file_db.id,
+                filename=file_db.filename,
+                content_type=file_db.content_type,
+                size_bytes=file_db.size_bytes,
+                checksum=file_db.checksum,
+                tenant_id=file_db.tenant_id,
+                created_at=file_db.created_at,
+                metadata=file_db.file_metadata
+            )
+
+    @app.delete(
+        "/files/{file_id}",
+        status_code=status.HTTP_200_OK,
+        tags=["files"],
+        summary="Delete file",
+        description="Soft delete a file"
+    )
+    async def delete_file_endpoint(
+        request: Request,
+        file_id: str = PathParam(..., description="File ID"),
+        tenant_ctx: Dict[str, str] = Depends(require_key)
+    ) -> Dict[str, str]:
+        """Soft delete a file."""
+        tenant_id = tenant_ctx["tenant"]
+        
+        async with request.app.state.db_session() as session:
+            deleted = await file_service.delete_file(session, tenant_id, file_id)
+            
+            if not deleted:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=build_error_response("FILE_NOT_FOUND", f"File not found: {file_id}")
+                )
+            
+            return {"message": "File deleted"}
+
+    @app.post(
+        "/parse",
+        response_model=ParseResult,
+        status_code=status.HTTP_200_OK,
+        tags=["parsing"],
+        summary="Parse document (sync)",
+        description="Synchronously parse a document with classification, splitting, and extraction"
+    )
+    async def parse_document_sync(
+        request: Request,
+        parse_request: ParserRunRequest,
+        tenant_ctx: Dict[str, str] = Depends(require_key)
+    ) -> ParseResult:
+        """Parse a document synchronously."""
+        tenant_id = tenant_ctx["tenant"]
+        
+        try:
+            logger.info(
+                "Synchronous parse started",
+                extra={
+                    "context": {
+                        "file_id": parse_request.file_id,
+                        "schema_id": parse_request.schema_id,
+                        "tenant_id": tenant_id,
+                    }
+                }
+            )
+            
+            async with request.app.state.db_session() as session:
+                # Create run
+                run_status = await parser_service.create_parser_run(
+                    session,
+                    tenant_id,
+                    parse_request.file_id,
+                    parse_request.schema_id,
+                    parse_request.extractor_id,
+                    parse_request.classifier_id,
+                    parse_request.splitter_id,
+                    parse_request.metadata
+                )
+                
+                # Execute immediately
+                result = await parser_service.execute_parser_run(
+                    session, tenant_id, run_status.run_id
+                )
+                
+                logger.info(
+                    "Parse completed",
+                    extra={
+                        "context": {
+                            "run_id": result.run_id,
+                            "status": result.status,
+                            "processing_time_ms": result.processing_time_ms,
+                            "tenant_id": tenant_id,
+                        }
+                    }
+                )
+                
+                return result
+                
+        except ValueError as e:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=build_error_response("resource_not_found", str(e))
+            )
+        except Exception as e:
+            logger.error(
+                "Parse failed",
+                extra={
+                    "context": {
+                        "file_id": parse_request.file_id,
+                        "error": str(e),
+                        "tenant_id": tenant_id,
+                    }
+                },
+                exc_info=True
+            )
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=build_error_response("parse_error", f"Parse failed: {str(e)}")
+            )
+
+    @app.post(
+        "/parse/async",
+        response_model=ParserRunStatus,
+        status_code=status.HTTP_202_ACCEPTED,
+        tags=["parsing"],
+        summary="Parse document (async)",
+        description="Create an asynchronous parser run (execution happens in background)"
+    )
+    async def parse_document_async(
+        request: Request,
+        parse_request: ParserRunRequest,
+        tenant_ctx: Dict[str, str] = Depends(require_key)
+    ) -> ParserRunStatus:
+        """Create an async parser run (actual execution would happen in background worker)."""
+        tenant_id = tenant_ctx["tenant"]
+        
+        try:
+            async with request.app.state.db_session() as session:
+                run_status = await parser_service.create_parser_run(
+                    session,
+                    tenant_id,
+                    parse_request.file_id,
+                    parse_request.schema_id,
+                    parse_request.extractor_id,
+                    parse_request.classifier_id,
+                    parse_request.splitter_id,
+                    parse_request.metadata
+                )
+                
+                logger.info(
+                    "Async parse created",
+                    extra={
+                        "context": {
+                            "run_id": run_status.run_id,
+                            "file_id": parse_request.file_id,
+                            "tenant_id": tenant_id,
+                        }
+                    }
+                )
+                
+                # In production, would trigger background job here
+                # For now, just return the pending status
+                
+                return run_status
+                
+        except ValueError as e:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=build_error_response("resource_not_found", str(e))
+            )
+        except Exception as e:
+            logger.error(
+                "Async parse creation failed",
+                extra={
+                    "context": {
+                        "file_id": parse_request.file_id,
+                        "error": str(e),
+                        "tenant_id": tenant_id,
+                    }
+                },
+                exc_info=True
+            )
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=build_error_response("parse_error", f"Parse creation failed: {str(e)}")
+            )
+
+    @app.get(
+        "/parse/{run_id}",
+        response_model=ParserRunStatus,
+        tags=["parsing"],
+        summary="Get parser run status",
+        description="Get the status of a parser run"
+    )
+    async def get_parser_run_endpoint(
+        request: Request,
+        run_id: str = PathParam(..., description="Parser run ID"),
+        tenant_ctx: Dict[str, str] = Depends(require_key)
+    ) -> ParserRunStatus:
+        """Get parser run status."""
+        tenant_id = tenant_ctx["tenant"]
+        
+        async with request.app.state.db_session() as session:
+            run_status = await parser_service.get_parser_run(session, tenant_id, run_id)
+            
+            if not run_status:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=build_error_response("RUN_NOT_FOUND", f"Parser run not found: {run_id}")
+                )
+            
+            return run_status
+
+    @app.get(
+        "/parse",
+        response_model=Dict[str, Any],
+        tags=["parsing"],
+        summary="List parser runs",
+        description="List parser runs with optional filtering"
+    )
+    async def list_parser_runs_endpoint(
+        request: Request,
+        file_id: Optional[str] = Query(None, description="Filter by file ID"),
+        status_filter: Optional[str] = Query(None, alias="status", description="Filter by status"),
+        limit: int = Query(50, ge=1, le=100, description="Maximum number of results"),
+        offset: int = Query(0, ge=0, description="Number of results to skip"),
+        tenant_ctx: Dict[str, str] = Depends(require_key)
+    ) -> Dict[str, Any]:
+        """List parser runs."""
+        tenant_id = tenant_ctx["tenant"]
+        
+        async with request.app.state.db_session() as session:
+            runs, total = await parser_service.list_parser_runs(
+                session, tenant_id, file_id, status_filter, limit, offset
+            )
+            
+            meta = build_pagination_meta(limit, offset, total)
+            
+            return {
+                "items": [r.model_dump() for r in runs],
+                "meta": meta
+            }
+
+    # =============================================================================
+    # Original Legacy Endpoints
+    # =============================================================================
 
     # File upload endpoint (protected)
     @app.post(
