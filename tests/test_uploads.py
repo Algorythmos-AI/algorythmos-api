@@ -20,7 +20,7 @@ def client() -> Generator[TestClient, None, None]:
 @pytest.fixture
 def valid_api_key() -> str:
     """Get valid API key from environment or use default."""
-    return os.getenv("API_KEY", "algo_dWukMWn8YyFfkdnL4yITRgp8042vYbz1ckk2aY3dv")
+    return os.getenv("ALG_API_KEY") or os.getenv("API_KEY", "algo_dWukMWn8YyFfkdnL4yITRgp8042vYbz1ckk2aY3dv")
 
 
 @pytest.fixture
