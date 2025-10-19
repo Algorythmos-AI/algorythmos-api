@@ -1,12 +1,10 @@
 from __future__ import annotations
 
 from sqlalchemy import DateTime, JSON, String, func, text
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.schema import Index
 
-
-class Base(DeclarativeBase):
-    pass
+from app.database import Base
 
 
 class Run(Base):
