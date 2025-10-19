@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 import pytest_asyncio
+pytest_plugins = ("pytest_asyncio",)
 import respx
 from httpx import ASGITransport, AsyncClient
 

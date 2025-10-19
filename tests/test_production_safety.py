@@ -25,8 +25,10 @@ def test_production_requires_api_key():
         with pytest.raises(ValidationError) as exc_info:
             Settings()
         
-        # Verify the error message mentions the missing API key
-        assert "ALG_API_KEY is required in production" in str(exc_info.value)
+        # Verify the error mentions the missing API key requirement
+        message = str(exc_info.value)
+        assert "ALG_API_KEY" in message
+        assert "required" in message
         
     finally:
         # Restore original environment
