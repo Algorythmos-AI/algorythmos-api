@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import List
 
+from pathlib import Path
 from pydantic import Field, AliasChoices, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -67,7 +68,7 @@ class Settings(BaseSettings):
     s3_secret_access_key: str = Field(default="", description="S3 secret access key")
     s3_bucket: str = Field(default="", description="S3 bucket name")
     
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(extra="ignore")
     
     @model_validator(mode='after')
     def validate_production_requirements(self) -> 'Settings':
@@ -103,5 +104,25 @@ class Settings(BaseSettings):
         return self.MAX_FILE_MB * 1024 * 1024
 
 
+def _default_env_file() -> tuple[str | None, str | None]:
+    env_path = Path(__file__).resolve().parent / ".env"
+    if env_path.exists():
+        return str(env_path), "utf-8"
+    project_env = Path.cwd() / ".env"
+    if project_env.exists():
+        return str(project_env), "utf-8"
+    return None, None
+
+
+def load_settings() -> Settings:
+    env_file, encoding = _default_env_file()
+    kwargs: dict[str, object] = {}
+    if env_file:
+        kwargs["_env_file"] = env_file
+    if encoding:
+        kwargs["_env_file_encoding"] = encoding
+    return Settings(**kwargs)
+
+
 # Global settings instance
-settings = Settings()
+settings = load_settings()
