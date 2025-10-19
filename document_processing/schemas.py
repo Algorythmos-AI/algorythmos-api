@@ -359,3 +359,193 @@ FileUpload.model_rebuild()
 ParserRunRequest.model_rebuild()
 ParserRunStatus.model_rebuild()
 ParseResult.model_rebuild()
+
+
+# ======================
+# PHASE 7: Processors, Workflows, Evaluation Sets
+# ======================
+
+class ProcessorConfig(BaseModel):
+    """Processor configuration response."""
+    
+    processor_id: str = Field(..., description="Unique processor identifier")
+    name: str = Field(..., description="Processor name")
+    description: str = Field("", description="Processor description")
+    processor_type: str = Field(..., description="Type of processor")
+    implementation: Dict[str, Any] = Field(..., description="Implementation details")
+    input_schema: Optional[Dict[str, Any]] = Field(None, description="Input schema")
+    output_schema: Optional[Dict[str, Any]] = Field(None, description="Output schema")
+    enabled: bool = Field(True, description="Whether processor is enabled")
+    version: int = Field(1, description="Processor version")
+    tenant_id: str = Field(..., description="Owner tenant ID")
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    metadata: Optional[Dict[str, Any]] = Field(None, description="Additional metadata")
+
+
+class CreateProcessorRequest(BaseModel):
+    """Request to create a processor."""
+    
+    name: str = Field(..., min_length=1, max_length=100, description="Processor name")
+    processor_type: str = Field(..., description="Type: extractor, transformer, validator, custom")
+    implementation: Dict[str, Any] = Field(..., description="Implementation details")
+    description: Optional[str] = Field(None, max_length=500, description="Description")
+    input_schema: Optional[Dict[str, Any]] = Field(None, description="Expected input format")
+    output_schema: Optional[Dict[str, Any]] = Field(None, description="Expected output format")
+    enabled: bool = Field(True, description="Whether processor is enabled")
+    metadata: Optional[Dict[str, Any]] = Field(None, description="Additional metadata")
+
+
+class UpdateProcessorRequest(BaseModel):
+    """Request to update a processor."""
+    
+    name: Optional[str] = Field(None, min_length=1, max_length=100)
+    description: Optional[str] = Field(None, max_length=500)
+    processor_type: Optional[str] = None
+    implementation: Optional[Dict[str, Any]] = None
+    input_schema: Optional[Dict[str, Any]] = None
+    output_schema: Optional[Dict[str, Any]] = None
+    enabled: Optional[bool] = None
+    metadata: Optional[Dict[str, Any]] = None
+
+
+class ProcessorListResponse(BaseModel):
+    """Response for processor list."""
+    
+    items: List[ProcessorConfig] = Field(..., description="List of processors")
+    meta: Dict[str, Any] = Field(..., description="Pagination metadata")
+
+
+class WorkflowConfig(BaseModel):
+    """Workflow configuration response."""
+    
+    workflow_id: str = Field(..., description="Unique workflow identifier")
+    name: str = Field(..., description="Workflow name")
+    description: str = Field("", description="Workflow description")
+    steps: List[Dict[str, Any]] = Field(..., description="Workflow steps")
+    enabled: bool = Field(True, description="Whether workflow is enabled")
+    version: int = Field(1, description="Workflow version")
+    tenant_id: str = Field(..., description="Owner tenant ID")
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    metadata: Optional[Dict[str, Any]] = Field(None, description="Additional metadata")
+
+
+class CreateWorkflowRequest(BaseModel):
+    """Request to create a workflow."""
+    
+    name: str = Field(..., min_length=1, max_length=100, description="Workflow name")
+    steps: List[Dict[str, Any]] = Field(..., description="Workflow steps with processor references")
+    description: Optional[str] = Field(None, max_length=500, description="Description")
+    enabled: bool = Field(True, description="Whether workflow is enabled")
+    metadata: Optional[Dict[str, Any]] = Field(None, description="Additional metadata")
+
+
+class UpdateWorkflowRequest(BaseModel):
+    """Request to update a workflow."""
+    
+    name: Optional[str] = Field(None, min_length=1, max_length=100)
+    description: Optional[str] = Field(None, max_length=500)
+    steps: Optional[List[Dict[str, Any]]] = None
+    enabled: Optional[bool] = None
+    metadata: Optional[Dict[str, Any]] = None
+
+
+class WorkflowListResponse(BaseModel):
+    """Response for workflow list."""
+    
+    items: List[WorkflowConfig] = Field(..., description="List of workflows")
+    meta: Dict[str, Any] = Field(..., description="Pagination metadata")
+
+
+class ExecuteWorkflowRequest(BaseModel):
+    """Request to execute a workflow."""
+    
+    input_data: Dict[str, Any] = Field(..., description="Input data for workflow")
+
+
+class WorkflowExecutionResult(BaseModel):
+    """Result of workflow execution."""
+    
+    workflow_id: str = Field(..., description="Workflow identifier")
+    workflow_name: str = Field(..., description="Workflow name")
+    input: Dict[str, Any] = Field(..., description="Input data")
+    output: Dict[str, Any] = Field(..., description="Output data")
+    steps: List[Dict[str, Any]] = Field(..., description="Step execution details")
+    status: str = Field(..., description="Execution status")
+
+
+class EvaluationSetConfig(BaseModel):
+    """Evaluation set configuration response."""
+    
+    evaluation_set_id: str = Field(..., description="Unique evaluation set identifier")
+    name: str = Field(..., description="Evaluation set name")
+    description: str = Field("", description="Evaluation set description")
+    test_cases: List[Dict[str, Any]] = Field(..., description="Test cases")
+    target_type: str = Field(..., description="Target type: processor, workflow, extractor, schema")
+    target_id: Optional[str] = Field(None, description="Specific target ID")
+    tenant_id: str = Field(..., description="Owner tenant ID")
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    metadata: Optional[Dict[str, Any]] = Field(None, description="Results and metrics")
+
+
+class CreateEvaluationSetRequest(BaseModel):
+    """Request to create an evaluation set."""
+    
+    name: str = Field(..., min_length=1, max_length=100, description="Evaluation set name")
+    test_cases: List[Dict[str, Any]] = Field(..., description="Test cases with input/expected output")
+    target_type: str = Field(..., description="processor, workflow, extractor, or schema")
+    description: Optional[str] = Field(None, max_length=500, description="Description")
+    target_id: Optional[str] = Field(None, description="Specific target ID to evaluate")
+    metadata: Optional[Dict[str, Any]] = Field(None, description="Additional metadata")
+
+
+class UpdateEvaluationSetRequest(BaseModel):
+    """Request to update an evaluation set."""
+    
+    name: Optional[str] = Field(None, min_length=1, max_length=100)
+    description: Optional[str] = Field(None, max_length=500)
+    test_cases: Optional[List[Dict[str, Any]]] = None
+    target_type: Optional[str] = None
+    target_id: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = None
+
+
+class EvaluationSetListResponse(BaseModel):
+    """Response for evaluation set list."""
+    
+    items: List[EvaluationSetConfig] = Field(..., description="List of evaluation sets")
+    meta: Dict[str, Any] = Field(..., description="Pagination metadata")
+
+
+class EvaluationResult(BaseModel):
+    """Result of evaluation run."""
+    
+    evaluation_set_id: str = Field(..., description="Evaluation set identifier")
+    evaluation_set_name: str = Field(..., description="Evaluation set name")
+    target_type: str = Field(..., description="Target type")
+    target_id: Optional[str] = Field(None, description="Target ID")
+    total_tests: int = Field(..., description="Total number of tests")
+    passed: int = Field(..., description="Number of passed tests")
+    failed: int = Field(..., description="Number of failed tests")
+    pass_rate: float = Field(..., description="Pass rate (0.0 to 1.0)")
+    results: List[Dict[str, Any]] = Field(..., description="Individual test results")
+
+
+# Rebuild PHASE 7 models
+ProcessorConfig.model_rebuild()
+CreateProcessorRequest.model_rebuild()
+UpdateProcessorRequest.model_rebuild()
+ProcessorListResponse.model_rebuild()
+WorkflowConfig.model_rebuild()
+CreateWorkflowRequest.model_rebuild()
+UpdateWorkflowRequest.model_rebuild()
+WorkflowListResponse.model_rebuild()
+ExecuteWorkflowRequest.model_rebuild()
+WorkflowExecutionResult.model_rebuild()
+EvaluationSetConfig.model_rebuild()
+CreateEvaluationSetRequest.model_rebuild()
+UpdateEvaluationSetRequest.model_rebuild()
+EvaluationSetListResponse.model_rebuild()
+EvaluationResult.model_rebuild()

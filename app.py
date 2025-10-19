@@ -63,6 +63,22 @@ from document_processing.schemas import (
     ParserRunRequest,
     ParserRunStatus,
     ParseResult,
+    # PHASE 7: Processor, Workflow, Evaluation schemas
+    ProcessorConfig,
+    CreateProcessorRequest,
+    UpdateProcessorRequest,
+    ProcessorListResponse,
+    WorkflowConfig,
+    CreateWorkflowRequest,
+    UpdateWorkflowRequest,
+    WorkflowListResponse,
+    ExecuteWorkflowRequest,
+    WorkflowExecutionResult,
+    EvaluationSetConfig,
+    CreateEvaluationSetRequest,
+    UpdateEvaluationSetRequest,
+    EvaluationSetListResponse,
+    EvaluationResult,
 )
 from document_processing.services.schema_service import SchemaService
 from document_processing.services import extractor_service
@@ -70,6 +86,9 @@ from document_processing.services import classifier_service
 from document_processing.services import splitter_service
 from document_processing.services import file_service
 from document_processing.services import parser_service
+from document_processing.services import processor_service
+from document_processing.services import workflow_service
+from document_processing.services import evaluation_service
 from core.config import build_error_response, build_pagination_meta
 
 # Database imports - use direct module references to avoid package conflicts
@@ -3043,6 +3062,809 @@ def build_api() -> FastAPI:
         )
 
         return Response(status_code=204)
+
+    # ======================
+    # PHASE 7: Processors, Workflows, Evaluation Sets
+    # ======================
+
+    @app.post(
+        "/processors",
+        response_model=ProcessorConfig,
+        status_code=status.HTTP_201_CREATED,
+        tags=["processors"],
+        summary="Create processor",
+        description="Create a new custom processor plugin",
+    )
+    async def create_processor_endpoint(
+        request: CreateProcessorRequest,
+        tenant_ctx: dict = Depends(require_key),
+        db: AsyncSession = Depends(get_session),
+    ):
+        """Create a new processor."""
+        try:
+            processor = await processor_service.create_processor(
+                session=db,
+                tenant_id=tenant_ctx["tenant"],
+                name=request.name,
+                processor_type=request.processor_type,
+                implementation=request.implementation,
+                description=request.description,
+                input_schema=request.input_schema,
+                output_schema=request.output_schema,
+                enabled=request.enabled,
+                metadata=request.metadata
+            )
+            
+            return ProcessorConfig(
+                processor_id=processor.id,
+                name=processor.name,
+                description=processor.description,
+                processor_type=processor.processor_type,
+                implementation=processor.implementation,
+                input_schema=processor.input_schema,
+                output_schema=processor.output_schema,
+                enabled=processor.enabled,
+                version=processor.version,
+                tenant_id=processor.tenant_id,
+                created_at=processor.created_at,
+                updated_at=processor.updated_at,
+                metadata=processor.processor_metadata
+            )
+        except ValueError as e:
+            return JSONResponse(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                content=build_error_response("DUPLICATE_NAME", str(e))
+            )
+        except Exception as e:
+            logger.error(f"Error creating processor: {e}", exc_info=True)
+            return JSONResponse(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                content=build_error_response("CREATION_ERROR", "Failed to create processor")
+            )
+
+    @app.get(
+        "/processors",
+        response_model=ProcessorListResponse,
+        tags=["processors"],
+        summary="List processors",
+        description="List all processors with pagination and filtering",
+    )
+    async def list_processors_endpoint(
+        limit: int = Query(50, ge=1, le=100),
+        offset: int = Query(0, ge=0),
+        processor_type: Optional[str] = Query(None),
+        enabled: Optional[bool] = Query(None),
+        tenant_ctx: dict = Depends(require_key),
+        db: AsyncSession = Depends(get_session),
+    ):
+        """List processors with pagination."""
+        try:
+            items, total = await processor_service.list_processors(
+                session=db,
+                tenant_id=tenant_ctx["tenant"],
+                limit=limit,
+                offset=offset,
+                processor_type=processor_type,
+                enabled=enabled
+            )
+            
+            processors = [
+                ProcessorConfig(
+                    processor_id=p.id,
+                    name=p.name,
+                    description=p.description,
+                    processor_type=p.processor_type,
+                    implementation=p.implementation,
+                    input_schema=p.input_schema,
+                    output_schema=p.output_schema,
+                    enabled=p.enabled,
+                    version=p.version,
+                    tenant_id=p.tenant_id,
+                    created_at=p.created_at,
+                    updated_at=p.updated_at,
+                    metadata=p.processor_metadata
+                )
+                for p in items
+            ]
+            
+            return ProcessorListResponse(
+                items=processors,
+                meta=build_pagination_meta(limit, offset, total)
+            )
+        except Exception as e:
+            logger.error(f"Error listing processors: {e}", exc_info=True)
+            return JSONResponse(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                content=build_error_response("LIST_ERROR", "Failed to list processors")
+            )
+
+    @app.get(
+        "/processors/{processor_id}",
+        response_model=ProcessorConfig,
+        tags=["processors"],
+        summary="Get processor",
+        description="Get processor by ID",
+    )
+    async def get_processor_endpoint(
+        processor_id: str = PathParam(...),
+        tenant_ctx: dict = Depends(require_key),
+        db: AsyncSession = Depends(get_session),
+    ):
+        """Get processor by ID."""
+        try:
+            processor = await processor_service.get_processor(
+                session=db,
+                tenant_id=tenant_ctx["tenant"],
+                processor_id=processor_id
+            )
+            
+            if not processor:
+                return JSONResponse(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    content=build_error_response("NOT_FOUND", f"Processor {processor_id} not found")
+                )
+            
+            return ProcessorConfig(
+                processor_id=processor.id,
+                name=processor.name,
+                description=processor.description,
+                processor_type=processor.processor_type,
+                implementation=processor.implementation,
+                input_schema=processor.input_schema,
+                output_schema=processor.output_schema,
+                enabled=processor.enabled,
+                version=processor.version,
+                tenant_id=processor.tenant_id,
+                created_at=processor.created_at,
+                updated_at=processor.updated_at,
+                metadata=processor.processor_metadata
+            )
+        except Exception as e:
+            logger.error(f"Error getting processor: {e}", exc_info=True)
+            return JSONResponse(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                content=build_error_response("GET_ERROR", "Failed to get processor")
+            )
+
+    @app.put(
+        "/processors/{processor_id}",
+        response_model=ProcessorConfig,
+        tags=["processors"],
+        summary="Update processor",
+        description="Update processor by ID",
+    )
+    async def update_processor_endpoint(
+        processor_id: str = PathParam(...),
+        request: UpdateProcessorRequest = None,
+        tenant_ctx: dict = Depends(require_key),
+        db: AsyncSession = Depends(get_session),
+    ):
+        """Update processor."""
+        try:
+            processor = await processor_service.update_processor(
+                session=db,
+                tenant_id=tenant_ctx["tenant"],
+                processor_id=processor_id,
+                name=request.name,
+                description=request.description,
+                processor_type=request.processor_type,
+                implementation=request.implementation,
+                input_schema=request.input_schema,
+                output_schema=request.output_schema,
+                enabled=request.enabled,
+                metadata=request.metadata
+            )
+            
+            if not processor:
+                return JSONResponse(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    content=build_error_response("NOT_FOUND", f"Processor {processor_id} not found")
+                )
+            
+            return ProcessorConfig(
+                processor_id=processor.id,
+                name=processor.name,
+                description=processor.description,
+                processor_type=processor.processor_type,
+                implementation=processor.implementation,
+                input_schema=processor.input_schema,
+                output_schema=processor.output_schema,
+                enabled=processor.enabled,
+                version=processor.version,
+                tenant_id=processor.tenant_id,
+                created_at=processor.created_at,
+                updated_at=processor.updated_at,
+                metadata=processor.processor_metadata
+            )
+        except ValueError as e:
+            return JSONResponse(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                content=build_error_response("DUPLICATE_NAME", str(e))
+            )
+        except Exception as e:
+            logger.error(f"Error updating processor: {e}", exc_info=True)
+            return JSONResponse(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                content=build_error_response("UPDATE_ERROR", "Failed to update processor")
+            )
+
+    @app.delete(
+        "/processors/{processor_id}",
+        status_code=status.HTTP_204_NO_CONTENT,
+        tags=["processors"],
+        summary="Delete processor",
+        description="Soft delete processor by ID",
+    )
+    async def delete_processor_endpoint(
+        processor_id: str = PathParam(...),
+        tenant_ctx: dict = Depends(require_key),
+        db: AsyncSession = Depends(get_session),
+    ):
+        """Delete processor."""
+        try:
+            deleted = await processor_service.delete_processor(
+                session=db,
+                tenant_id=tenant_ctx["tenant"],
+                processor_id=processor_id
+            )
+            
+            if not deleted:
+                return JSONResponse(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    content=build_error_response("NOT_FOUND", f"Processor {processor_id} not found")
+                )
+            
+            return Response(status_code=status.HTTP_204_NO_CONTENT)
+        except Exception as e:
+            logger.error(f"Error deleting processor: {e}", exc_info=True)
+            return JSONResponse(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                content=build_error_response("DELETE_ERROR", "Failed to delete processor")
+            )
+
+    # Workflow endpoints
+    @app.post(
+        "/workflows",
+        response_model=WorkflowConfig,
+        status_code=status.HTTP_201_CREATED,
+        tags=["workflows"],
+        summary="Create workflow",
+        description="Create a new workflow (chain of processors)",
+    )
+    async def create_workflow_endpoint(
+        request: CreateWorkflowRequest,
+        tenant_ctx: dict = Depends(require_key),
+        db: AsyncSession = Depends(get_session),
+    ):
+        """Create a new workflow."""
+        try:
+            workflow = await workflow_service.create_workflow(
+                session=db,
+                tenant_id=tenant_ctx["tenant"],
+                name=request.name,
+                steps=request.steps,
+                description=request.description,
+                enabled=request.enabled,
+                metadata=request.metadata
+            )
+            
+            return WorkflowConfig(
+                workflow_id=workflow.id,
+                name=workflow.name,
+                description=workflow.description,
+                steps=workflow.steps,
+                enabled=workflow.enabled,
+                version=workflow.version,
+                tenant_id=workflow.tenant_id,
+                created_at=workflow.created_at,
+                updated_at=workflow.updated_at,
+                metadata=workflow.workflow_metadata
+            )
+        except ValueError as e:
+            return JSONResponse(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                content=build_error_response("VALIDATION_ERROR", str(e))
+            )
+        except Exception as e:
+            logger.error(f"Error creating workflow: {e}", exc_info=True)
+            return JSONResponse(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                content=build_error_response("CREATION_ERROR", "Failed to create workflow")
+            )
+
+    @app.get(
+        "/workflows",
+        response_model=WorkflowListResponse,
+        tags=["workflows"],
+        summary="List workflows",
+        description="List all workflows with pagination",
+    )
+    async def list_workflows_endpoint(
+        limit: int = Query(50, ge=1, le=100),
+        offset: int = Query(0, ge=0),
+        enabled: Optional[bool] = Query(None),
+        tenant_ctx: dict = Depends(require_key),
+        db: AsyncSession = Depends(get_session),
+    ):
+        """List workflows with pagination."""
+        try:
+            items, total = await workflow_service.list_workflows(
+                session=db,
+                tenant_id=tenant_ctx["tenant"],
+                limit=limit,
+                offset=offset,
+                enabled=enabled
+            )
+            
+            workflows = [
+                WorkflowConfig(
+                    workflow_id=w.id,
+                    name=w.name,
+                    description=w.description,
+                    steps=w.steps,
+                    enabled=w.enabled,
+                    version=w.version,
+                    tenant_id=w.tenant_id,
+                    created_at=w.created_at,
+                    updated_at=w.updated_at,
+                    metadata=w.workflow_metadata
+                )
+                for w in items
+            ]
+            
+            return WorkflowListResponse(
+                items=workflows,
+                meta=build_pagination_meta(limit, offset, total)
+            )
+        except Exception as e:
+            logger.error(f"Error listing workflows: {e}", exc_info=True)
+            return JSONResponse(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                content=build_error_response("LIST_ERROR", "Failed to list workflows")
+            )
+
+    @app.get(
+        "/workflows/{workflow_id}",
+        response_model=WorkflowConfig,
+        tags=["workflows"],
+        summary="Get workflow",
+        description="Get workflow by ID",
+    )
+    async def get_workflow_endpoint(
+        workflow_id: str = PathParam(...),
+        tenant_ctx: dict = Depends(require_key),
+        db: AsyncSession = Depends(get_session),
+    ):
+        """Get workflow by ID."""
+        try:
+            workflow = await workflow_service.get_workflow(
+                session=db,
+                tenant_id=tenant_ctx["tenant"],
+                workflow_id=workflow_id
+            )
+            
+            if not workflow:
+                return JSONResponse(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    content=build_error_response("NOT_FOUND", f"Workflow {workflow_id} not found")
+                )
+            
+            return WorkflowConfig(
+                workflow_id=workflow.id,
+                name=workflow.name,
+                description=workflow.description,
+                steps=workflow.steps,
+                enabled=workflow.enabled,
+                version=workflow.version,
+                tenant_id=workflow.tenant_id,
+                created_at=workflow.created_at,
+                updated_at=workflow.updated_at,
+                metadata=workflow.workflow_metadata
+            )
+        except Exception as e:
+            logger.error(f"Error getting workflow: {e}", exc_info=True)
+            return JSONResponse(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                content=build_error_response("GET_ERROR", "Failed to get workflow")
+            )
+
+    @app.put(
+        "/workflows/{workflow_id}",
+        response_model=WorkflowConfig,
+        tags=["workflows"],
+        summary="Update workflow",
+        description="Update workflow by ID",
+    )
+    async def update_workflow_endpoint(
+        workflow_id: str = PathParam(...),
+        request: UpdateWorkflowRequest = None,
+        tenant_ctx: dict = Depends(require_key),
+        db: AsyncSession = Depends(get_session),
+    ):
+        """Update workflow."""
+        try:
+            workflow = await workflow_service.update_workflow(
+                session=db,
+                tenant_id=tenant_ctx["tenant"],
+                workflow_id=workflow_id,
+                name=request.name,
+                description=request.description,
+                steps=request.steps,
+                enabled=request.enabled,
+                metadata=request.metadata
+            )
+            
+            if not workflow:
+                return JSONResponse(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    content=build_error_response("NOT_FOUND", f"Workflow {workflow_id} not found")
+                )
+            
+            return WorkflowConfig(
+                workflow_id=workflow.id,
+                name=workflow.name,
+                description=workflow.description,
+                steps=workflow.steps,
+                enabled=workflow.enabled,
+                version=workflow.version,
+                tenant_id=workflow.tenant_id,
+                created_at=workflow.created_at,
+                updated_at=workflow.updated_at,
+                metadata=workflow.workflow_metadata
+            )
+        except ValueError as e:
+            return JSONResponse(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                content=build_error_response("VALIDATION_ERROR", str(e))
+            )
+        except Exception as e:
+            logger.error(f"Error updating workflow: {e}", exc_info=True)
+            return JSONResponse(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                content=build_error_response("UPDATE_ERROR", "Failed to update workflow")
+            )
+
+    @app.delete(
+        "/workflows/{workflow_id}",
+        status_code=status.HTTP_204_NO_CONTENT,
+        tags=["workflows"],
+        summary="Delete workflow",
+        description="Soft delete workflow by ID",
+    )
+    async def delete_workflow_endpoint(
+        workflow_id: str = PathParam(...),
+        tenant_ctx: dict = Depends(require_key),
+        db: AsyncSession = Depends(get_session),
+    ):
+        """Delete workflow."""
+        try:
+            deleted = await workflow_service.delete_workflow(
+                session=db,
+                tenant_id=tenant_ctx["tenant"],
+                workflow_id=workflow_id
+            )
+            
+            if not deleted:
+                return JSONResponse(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    content=build_error_response("NOT_FOUND", f"Workflow {workflow_id} not found")
+                )
+            
+            return Response(status_code=status.HTTP_204_NO_CONTENT)
+        except Exception as e:
+            logger.error(f"Error deleting workflow: {e}", exc_info=True)
+            return JSONResponse(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                content=build_error_response("DELETE_ERROR", "Failed to delete workflow")
+            )
+
+    @app.post(
+        "/workflows/{workflow_id}/execute",
+        response_model=WorkflowExecutionResult,
+        tags=["workflows"],
+        summary="Execute workflow",
+        description="Execute a workflow with input data",
+    )
+    async def execute_workflow_endpoint(
+        workflow_id: str = PathParam(...),
+        request: ExecuteWorkflowRequest = None,
+        tenant_ctx: dict = Depends(require_key),
+        db: AsyncSession = Depends(get_session),
+    ):
+        """Execute workflow."""
+        try:
+            result = await workflow_service.execute_workflow(
+                session=db,
+                tenant_id=tenant_ctx["tenant"],
+                workflow_id=workflow_id,
+                input_data=request.input_data
+            )
+            
+            return WorkflowExecutionResult(**result)
+        except ValueError as e:
+            return JSONResponse(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                content=build_error_response("EXECUTION_ERROR", str(e))
+            )
+        except Exception as e:
+            logger.error(f"Error executing workflow: {e}", exc_info=True)
+            return JSONResponse(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                content=build_error_response("EXECUTION_ERROR", "Failed to execute workflow")
+            )
+
+    # Evaluation set endpoints
+    @app.post(
+        "/evaluation-sets",
+        response_model=EvaluationSetConfig,
+        status_code=status.HTTP_201_CREATED,
+        tags=["evaluation"],
+        summary="Create evaluation set",
+        description="Create a new evaluation set for testing",
+    )
+    async def create_evaluation_set_endpoint(
+        request: CreateEvaluationSetRequest,
+        tenant_ctx: dict = Depends(require_key),
+        db: AsyncSession = Depends(get_session),
+    ):
+        """Create a new evaluation set."""
+        try:
+            eval_set = await evaluation_service.create_evaluation_set(
+                session=db,
+                tenant_id=tenant_ctx["tenant"],
+                name=request.name,
+                test_cases=request.test_cases,
+                target_type=request.target_type,
+                description=request.description,
+                target_id=request.target_id,
+                metadata=request.metadata
+            )
+            
+            return EvaluationSetConfig(
+                evaluation_set_id=eval_set.id,
+                name=eval_set.name,
+                description=eval_set.description,
+                test_cases=eval_set.test_cases,
+                target_type=eval_set.target_type,
+                target_id=eval_set.target_id,
+                tenant_id=eval_set.tenant_id,
+                created_at=eval_set.created_at,
+                updated_at=eval_set.updated_at,
+                metadata=eval_set.evaluation_metadata
+            )
+        except ValueError as e:
+            return JSONResponse(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                content=build_error_response("VALIDATION_ERROR", str(e))
+            )
+        except Exception as e:
+            logger.error(f"Error creating evaluation set: {e}", exc_info=True)
+            return JSONResponse(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                content=build_error_response("CREATION_ERROR", "Failed to create evaluation set")
+            )
+
+    @app.get(
+        "/evaluation-sets",
+        response_model=EvaluationSetListResponse,
+        tags=["evaluation"],
+        summary="List evaluation sets",
+        description="List all evaluation sets with pagination",
+    )
+    async def list_evaluation_sets_endpoint(
+        limit: int = Query(50, ge=1, le=100),
+        offset: int = Query(0, ge=0),
+        target_type: Optional[str] = Query(None),
+        target_id: Optional[str] = Query(None),
+        tenant_ctx: dict = Depends(require_key),
+        db: AsyncSession = Depends(get_session),
+    ):
+        """List evaluation sets with pagination."""
+        try:
+            items, total = await evaluation_service.list_evaluation_sets(
+                session=db,
+                tenant_id=tenant_ctx["tenant"],
+                limit=limit,
+                offset=offset,
+                target_type=target_type,
+                target_id=target_id
+            )
+            
+            eval_sets = [
+                EvaluationSetConfig(
+                    evaluation_set_id=e.id,
+                    name=e.name,
+                    description=e.description,
+                    test_cases=e.test_cases,
+                    target_type=e.target_type,
+                    target_id=e.target_id,
+                    tenant_id=e.tenant_id,
+                    created_at=e.created_at,
+                    updated_at=e.updated_at,
+                    metadata=e.evaluation_metadata
+                )
+                for e in items
+            ]
+            
+            return EvaluationSetListResponse(
+                items=eval_sets,
+                meta=build_pagination_meta(limit, offset, total)
+            )
+        except Exception as e:
+            logger.error(f"Error listing evaluation sets: {e}", exc_info=True)
+            return JSONResponse(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                content=build_error_response("LIST_ERROR", "Failed to list evaluation sets")
+            )
+
+    @app.get(
+        "/evaluation-sets/{evaluation_set_id}",
+        response_model=EvaluationSetConfig,
+        tags=["evaluation"],
+        summary="Get evaluation set",
+        description="Get evaluation set by ID",
+    )
+    async def get_evaluation_set_endpoint(
+        evaluation_set_id: str = PathParam(...),
+        tenant_ctx: dict = Depends(require_key),
+        db: AsyncSession = Depends(get_session),
+    ):
+        """Get evaluation set by ID."""
+        try:
+            eval_set = await evaluation_service.get_evaluation_set(
+                session=db,
+                tenant_id=tenant_ctx["tenant"],
+                evaluation_set_id=evaluation_set_id
+            )
+            
+            if not eval_set:
+                return JSONResponse(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    content=build_error_response("NOT_FOUND", f"Evaluation set {evaluation_set_id} not found")
+                )
+            
+            return EvaluationSetConfig(
+                evaluation_set_id=eval_set.id,
+                name=eval_set.name,
+                description=eval_set.description,
+                test_cases=eval_set.test_cases,
+                target_type=eval_set.target_type,
+                target_id=eval_set.target_id,
+                tenant_id=eval_set.tenant_id,
+                created_at=eval_set.created_at,
+                updated_at=eval_set.updated_at,
+                metadata=eval_set.evaluation_metadata
+            )
+        except Exception as e:
+            logger.error(f"Error getting evaluation set: {e}", exc_info=True)
+            return JSONResponse(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                content=build_error_response("GET_ERROR", "Failed to get evaluation set")
+            )
+
+    @app.put(
+        "/evaluation-sets/{evaluation_set_id}",
+        response_model=EvaluationSetConfig,
+        tags=["evaluation"],
+        summary="Update evaluation set",
+        description="Update evaluation set by ID",
+    )
+    async def update_evaluation_set_endpoint(
+        evaluation_set_id: str = PathParam(...),
+        request: UpdateEvaluationSetRequest = None,
+        tenant_ctx: dict = Depends(require_key),
+        db: AsyncSession = Depends(get_session),
+    ):
+        """Update evaluation set."""
+        try:
+            eval_set = await evaluation_service.update_evaluation_set(
+                session=db,
+                tenant_id=tenant_ctx["tenant"],
+                evaluation_set_id=evaluation_set_id,
+                name=request.name,
+                description=request.description,
+                test_cases=request.test_cases,
+                target_type=request.target_type,
+                target_id=request.target_id,
+                metadata=request.metadata
+            )
+            
+            if not eval_set:
+                return JSONResponse(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    content=build_error_response("NOT_FOUND", f"Evaluation set {evaluation_set_id} not found")
+                )
+            
+            return EvaluationSetConfig(
+                evaluation_set_id=eval_set.id,
+                name=eval_set.name,
+                description=eval_set.description,
+                test_cases=eval_set.test_cases,
+                target_type=eval_set.target_type,
+                target_id=eval_set.target_id,
+                tenant_id=eval_set.tenant_id,
+                created_at=eval_set.created_at,
+                updated_at=eval_set.updated_at,
+                metadata=eval_set.evaluation_metadata
+            )
+        except ValueError as e:
+            return JSONResponse(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                content=build_error_response("VALIDATION_ERROR", str(e))
+            )
+        except Exception as e:
+            logger.error(f"Error updating evaluation set: {e}", exc_info=True)
+            return JSONResponse(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                content=build_error_response("UPDATE_ERROR", "Failed to update evaluation set")
+            )
+
+    @app.delete(
+        "/evaluation-sets/{evaluation_set_id}",
+        status_code=status.HTTP_204_NO_CONTENT,
+        tags=["evaluation"],
+        summary="Delete evaluation set",
+        description="Soft delete evaluation set by ID",
+    )
+    async def delete_evaluation_set_endpoint(
+        evaluation_set_id: str = PathParam(...),
+        tenant_ctx: dict = Depends(require_key),
+        db: AsyncSession = Depends(get_session),
+    ):
+        """Delete evaluation set."""
+        try:
+            deleted = await evaluation_service.delete_evaluation_set(
+                session=db,
+                tenant_id=tenant_ctx["tenant"],
+                evaluation_set_id=evaluation_set_id
+            )
+            
+            if not deleted:
+                return JSONResponse(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    content=build_error_response("NOT_FOUND", f"Evaluation set {evaluation_set_id} not found")
+                )
+            
+            return Response(status_code=status.HTTP_204_NO_CONTENT)
+        except Exception as e:
+            logger.error(f"Error deleting evaluation set: {e}", exc_info=True)
+            return JSONResponse(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                content=build_error_response("DELETE_ERROR", "Failed to delete evaluation set")
+            )
+
+    @app.post(
+        "/evaluation-sets/{evaluation_set_id}/run",
+        response_model=EvaluationResult,
+        tags=["evaluation"],
+        summary="Run evaluation",
+        description="Run evaluation set against its target",
+    )
+    async def run_evaluation_endpoint(
+        evaluation_set_id: str = PathParam(...),
+        tenant_ctx: dict = Depends(require_key),
+        db: AsyncSession = Depends(get_session),
+    ):
+        """Run evaluation."""
+        try:
+            result = await evaluation_service.run_evaluation(
+                session=db,
+                tenant_id=tenant_ctx["tenant"],
+                evaluation_set_id=evaluation_set_id
+            )
+            
+            return EvaluationResult(**result)
+        except ValueError as e:
+            return JSONResponse(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                content=build_error_response("EXECUTION_ERROR", str(e))
+            )
+        except Exception as e:
+            logger.error(f"Error running evaluation: {e}", exc_info=True)
+            return JSONResponse(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                content=build_error_response("EXECUTION_ERROR", "Failed to run evaluation")
+            )
 
     return app
 
