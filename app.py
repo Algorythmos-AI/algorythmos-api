@@ -702,22 +702,8 @@ def build_api() -> FastAPI:
 
         # Upload files to vendor service
         try:
-            # Recreate UploadFile objects from validated data
-            upload_files = []
-            for fd in file_data:
-                import io
-                from starlette.datastructures import UploadFile as StarletteUpload, Headers
-                fake_file = io.BytesIO(fd["content"])
-                headers = Headers({"content-type": fd["content_type"]})
-                upload_files.append(
-                    StarletteUpload(
-                        file=fake_file,
-                        filename=fd["filename"],
-                        headers=headers,
-                    )
-                )
-            
-            upload_result = await vendor.upload_files_stream(upload_files)
+            # Pass file data directly to vendor (filename, content, content_type)
+            upload_result = await vendor.upload_files_stream(file_data)
             input_path = upload_result.get("input_path", "mock://upload")
         except Exception as exc:
             raise HTTPException(

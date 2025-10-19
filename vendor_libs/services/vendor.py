@@ -139,22 +139,42 @@ class VendorService:
 
 
 async def upload_files_stream(files: Sequence[Any]) -> Json:
+    """Upload files to vendor service.
+    
+    Args:
+        files: List of dicts with 'filename', 'content', 'content_type' keys,
+               or list of UploadFile objects
+    """
     if not files:
         raise ValueError("At least one file must be provided for upload.")
 
     async def _do():
         async with vendor_client() as client:
-            form_files: List[Tuple[str, Tuple[str, Any, str]]] = [
-                (
-                    "files",
-                    (
-                        up.filename or "upload.pdf",
-                        up,
-                        up.content_type or "application/pdf",
-                    ),
-                )
-                for up in files
-            ]
+            # Handle both dict format and UploadFile format
+            form_files: List[Tuple[str, Tuple[str, Any, str]]] = []
+            
+            for up in files:
+                if isinstance(up, dict):
+                    # Dict format: {filename, content, content_type}
+                    form_files.append((
+                        "files",
+                        (
+                            up.get("filename", "upload.pdf"),
+                            up["content"],
+                            up.get("content_type", "application/pdf"),
+                        ),
+                    ))
+                else:
+                    # UploadFile format
+                    form_files.append((
+                        "files",
+                        (
+                            up.filename or "upload.pdf",
+                            up,
+                            up.content_type or "application/pdf",
+                        ),
+                    ))
+            
             endpoint = "/extract/upload"
             start = time.perf_counter()
             try:
