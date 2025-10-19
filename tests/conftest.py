@@ -22,11 +22,11 @@ os.environ.setdefault("VENDOR_WEBHOOK_SECRET", "stage7-secret")
 os.environ.setdefault("NO_NETWORK", "1")
 
 APP_MODULE_PATH = ROOT / "app.py"
-spec = importlib.util.spec_from_file_location("app", APP_MODULE_PATH)
+spec = importlib.util.spec_from_file_location("app_main", APP_MODULE_PATH)
 if spec is None or spec.loader is None:
     raise RuntimeError("Unable to load app module from app.py")
 app_module = importlib.util.module_from_spec(spec)
-sys.modules["app"] = app_module
+sys.modules["app_main"] = app_module
 spec.loader.exec_module(app_module)
 
 fastapi_app = app_module.app
