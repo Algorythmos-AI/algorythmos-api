@@ -3,6 +3,11 @@ from __future__ import annotations
 import os
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.orm import DeclarativeBase
+
+# Shared declarative base for all models
+class Base(DeclarativeBase):
+    pass
 
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///./dev.db")
 
