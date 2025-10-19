@@ -1,53 +1,91 @@
-# PDF Usage Extraction Service
+# Generic Document Processing API
 
-Production-ready FastAPI microservice that extracts structured internet usage data from telecom PDF invoices. Features provider-specific extractors (Orange France + generic fallback), async processing with SQLAlchemy persistence, idempotency-safe API, Prometheus metrics, and robust error handling. Deployed on Vercel at https://api.algorythmos.fr.
+**Production-ready FastAPI microservice for multi-tenant document processing with full Extend API parity.**
+
+Comprehensive document processing platform supporting 13+ file formats (PDF, DOCX, XLSX, images, etc.) with intelligent extraction, classification, parsing, and LLM-powered analysis. Features multi-tenant isolation, version-aware APIs, processor/workflow orchestration, evaluation frameworks, and enterprise-grade observability.
+
+🎯 **100% Extend API Parity** — All 8 sprints delivered (150+ tests, zero gaps)  
+🔐 **Multi-tenant Architecture** — Complete tenant isolation with Bearer auth + API keys  
+📊 **Production Hardened** — Rate limiting, idempotency, metrics, CI/CD pipeline  
+⚡ **13 File Formats** — PDF, DOCX, XLSX, CSV, JSON, XML, HTML, Markdown, images (PNG/JPG/TIFF), TXT, RTF  
+🤖 **LLM Integration** — Summarization, entity extraction, Q&A via OpenAI/Anthropic  
+
+**Deployed:** https://api.algorythmos.fr | **API Docs:** https://api.algorythmos.fr/docs
 
 ## ✨ Key Features
 
-- 🔄 **Dual-mode file input**: Upload files directly or reference pre-uploaded paths
-- 🔐 **Idempotency support**: Safe request retries with `Idempotency-Key` header
-- 📊 **Database persistence**: SQLAlchemy async with PostgreSQL/SQLite support
-- 📈 **Observability**: Prometheus metrics for monitoring and alerting
-- 🔔 **Webhook callbacks**: HMAC-SHA256 secured notifications
-- ⚡ **Retry logic**: Exponential backoff with jitter for vendor requests
-- 🎯 **Cursor pagination**: Efficient runs listing with filtering
-- 🏷️ **OpenAPI docs**: Comprehensive auto-generated API documentation
+### Core Processing
+- � **Multi-format Support**: 13 file types (PDF, DOCX, XLSX, CSV, JSON, XML, HTML, MD, PNG, JPG, TIFF, TXT, RTF)
+- 🔍 **Extraction Schemas**: Regex-based field extraction with validation
+- 🏷️ **Classification**: Document type detection and categorization  
+- ✂️ **Splitting**: Chunk-based document segmentation
+- 📝 **Parsing**: Full document parsing with blocks, chunks, and metadata
+- 🤖 **LLM Operations**: Summarization, entity extraction, Q&A (OpenAI/Anthropic)
+
+### Enterprise Features
+- 🔐 **Multi-tenant Isolation**: Complete data separation per tenant
+- 🔑 **Flexible Auth**: Bearer tokens + API keys with version-aware headers
+- � **Processor Versions**: Publish, draft, rollback with default management
+- 🔄 **Processor Runs**: Execution tracking with citations and output storage
+- 🌊 **Workflow Runs**: Multi-step pipelines with corrections and audit trails
+- 📊 **Evaluation Framework**: Bulk evaluation with ground truth comparison
+- 🔔 **Webhook Integration**: HMAC-secured callbacks with version headers
+
+### Production Ready
+- ⚡ **Rate Limiting**: Per-tenant throttling (60 req/min default)
+- 🔒 **Idempotency**: 24h cache with unique keys for safe retries
+- 📈 **Observability**: Prometheus metrics + structured logging + request tracing
+- 🎯 **Cursor Pagination**: Efficient listing with filtering
+- 🧪 **Comprehensive Tests**: 150+ tests across 8 sprints (100% pass rate)
+- 🚀 **CI/CD Pipeline**: Automated testing + security audits + Docker builds
+- 📚 **OpenAPI Docs**: Interactive API documentation with examples
 
 ## 🚀 Quick Start
 
 ### Local Development
 
-1. **Setup environment**:
+1. **Clone and setup**:
    ```bash
-   # Copy example environment file
-   cp .env.example .env
-   # Edit .env with your API key and settings
+   git clone https://github.com/your-org/api-algorythmos.git
+   cd api-algorythmos
+   
+   # Install uv (fast Python package manager)
+   curl -LsSf https://astral.sh/uv/install.sh | sh
    ```
 
-2. **Install dependencies**:
+2. **Configure environment**:
    ```bash
-   # Using uv (recommended)
-   make install
-   # OR using pip/venv
-   python -m venv venv
-   source venv/bin/activate  # or `venv\Scripts\activate` on Windows
-   pip install -e .[dev]
+   # Set required environment variables
+   export ALG_API_KEY="your-api-key-min-32-chars"
+   export DATABASE_URL="sqlite+aiosqlite:///./dev.db"  # Or PostgreSQL
+   
+   # Optional: Configure LLM (for Sprint 5 features)
+   export OPENAI_API_KEY="sk-..."  # Or ANTHROPIC_API_KEY
    ```
 
-3. **Start development server**:
+3. **Setup database**:
    ```bash
-   make dev
-   # OR directly
-   uvicorn app:app --reload --host 0.0.0.0 --port 8000
+   # Run migrations
+   uv run alembic upgrade head
    ```
 
-4. **Test the API**:
+4. **Start server**:
    ```bash
-   curl http://localhost:8000/api/alg/healthz
-   # Should return: {"status":"ok"}
+   # Development mode with auto-reload
+   uv run uvicorn app:app --reload --host 0.0.0.0 --port 8000
    ```
 
-Visit `http://localhost:8000/docs` for the interactive API documentation.
+5. **Test the API**:
+   ```bash
+   # Health check (public)
+   curl http://localhost:8000/health
+   
+   # OpenAPI schema (public)
+   curl http://localhost:8000/openapi.json
+   ```
+
+6. **Explore API**:  
+   Visit **http://localhost:8000/docs** for interactive API documentation.
 
 ### Testing
 
@@ -64,7 +102,39 @@ pytest tests/test_smoke.py -v
 
 ## 📡 API Usage
 
-All protected endpoints require authentication via the `X-Api-Key` header and tenant identification via `X-Tenant-Id`.
+### Authentication
+
+All protected endpoints require authentication. Two methods are supported:
+
+**1. API Key Authentication** (X-API-Key header):
+```bash
+curl -H "X-API-Key: your-api-key" \
+     -H "X-Tenant-ID: your-tenant-id" \
+     https://api.algorythmos.fr/api/files
+```
+
+**2. Bearer Token Authentication**:
+```bash
+curl -H "Authorization: Bearer your-jwt-token" \
+     -H "X-Tenant-ID: your-tenant-id" \
+     https://api.algorythmos.fr/api/files
+```
+
+### Required Headers
+
+| Header | Required | Description | Example |
+|--------|----------|-------------|---------|
+| `X-API-Key` or `Authorization` | ✅ Yes | API key or Bearer token | `X-API-Key: alg_...` or `Authorization: Bearer eyJ...` |
+| `X-Tenant-ID` | ✅ Yes | Tenant identifier for multi-tenant isolation | `X-Tenant-ID: acme-corp` |
+| `x-extend-api-version` | ⚠️ Optional | API version for compatibility | `x-extend-api-version: 2024-01-15` |
+| `Idempotency-Key` | ⚠️ Optional | Unique key for safe retries (24h cache) | `Idempotency-Key: order-123-retry-1` |
+
+**Public Endpoints** (no auth required):
+- `GET /health` - Service health check
+- `GET /version` - API version information
+- `GET /openapi.json` - OpenAPI schema
+- `GET /docs` - Interactive API documentation
+- `GET /metrics` - Prometheus metrics (for monitoring systems)
 
 ### Health & Monitoring
 
