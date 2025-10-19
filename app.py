@@ -453,10 +453,13 @@ def build_api() -> FastAPI:
         # Startup
         logger = get_logger()
         
-        # Initialize database tables
-        if engine is not None:
-            async with engine.begin() as conn:
-                await conn.run_sync(Base.metadata.create_all)
+        # Initialize database tables (only if database is configured)
+        try:
+            if engine is not None and Base is not None:
+                async with engine.begin() as conn:
+                    await conn.run_sync(Base.metadata.create_all)
+        except Exception as e:
+            logger.warning(f"Database initialization skipped or failed: {e}")
         
         versions = {
             "service": app.version,
