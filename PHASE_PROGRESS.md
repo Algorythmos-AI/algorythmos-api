@@ -3,7 +3,7 @@
 ## Execution Status
 
 **Started:** 2025-10-19
-**Current Phase:** PHASE 1 - Foundation + /schemas CRUD
+**Current Phase:** PHASE 2 - Regex Extractor  
 **Overall Status:** IN_PROGRESS
 
 ---
@@ -11,6 +11,7 @@
 ## PHASE 0: Pre-Flight Checks ✓
 
 **Goal:** Establish architectural foundations and align codebase standards
+**Status:** COMPLETE
 
 ### Completed ✓
 - [x] API prefix detection: `/api` (via `root_path`)
@@ -34,9 +35,10 @@
 
 ---
 
-## PHASE 1: Foundation + /schemas CRUD ⏳
+## PHASE 1: Foundation + /schemas CRUD ✓
 
-**Status:** IN_PROGRESS (Service Layer Complete)
+**Status:** COMPLETE
+**Goal:** Implement soft-delete, offset pagination, and standardized errors for all document processing CRUD
 
 ### Completed ✓
 - [x] Schema service: soft-delete + offset pagination + standardized errors
@@ -48,16 +50,23 @@
 - [x] All deletes are now soft deletes (set is_deleted=True)
 - [x] Duplicate name checks only check non-deleted resources
 - [x] Schema verification in extractor service filters deleted schemas
+- [x] Updated all list endpoints (/schemas, /extractors, /classifiers, /splitters)
+- [x] All endpoints use offset parameter instead of cursor
+- [x] All endpoints return {items, meta} with standardized pagination
+- [x] Comprehensive test suite created (test_phase1_crud.py)
+- [x] Tests cover soft-delete, pagination, error formats for all resources
 
-### In Progress
-- [ ] Update app.py endpoints for extractor/classifier/splitter with new pagination
-- [ ] Update tests for soft-delete behavior
-- [ ] Verify with curl tests
+### Implementation Details
+- **Service signatures changed:** `cursor` parameter → `offset` parameter
+- **Return type changed:** Response models → tuples `(items, total)`
+- **All queries filter:** `is_deleted == False`
+- **Meta format:** `{limit, offset, total, next_offset, has_more}`
+- **Error format:** `{"error": {"type": "...", "message": "..."}}`
 
 ### Notes
-- Service signatures changed: `cursor` parameter → `offset` parameter
-- Return type changed from response models to tuples for separation of concerns
-- All queries filter `is_deleted == False`
+- Soft-delete allows name reuse (only check non-deleted resources)
+- Separation of concerns: services return data, endpoints build responses
+- All CRUD operations properly tenant-isolated
 
 ---
 
