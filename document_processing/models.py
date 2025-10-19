@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, Column, DateTime, Integer, JSON, String, Text
+from sqlalchemy import Boolean, Column, DateTime, Float, Integer, JSON, String, Text
 from sqlalchemy.sql import func
 
 from app.models import Base
@@ -235,6 +235,9 @@ class WebhookDeliveryDB(Base):
     response_body = Column(Text, nullable=True)
     error_message = Column(Text, nullable=True)
     
+    # API version tracking (Sprint 7 - P7.1)
+    api_version = Column(String(50), nullable=True)  # x-extend-api-version from request
+    
     # Timing
     scheduled_at = Column(DateTime, nullable=False, default=func.now())
     attempted_at = Column(DateTime, nullable=True)
@@ -388,3 +391,32 @@ class EvaluationSetDB(Base):
     
     def __repr__(self) -> str:
         return f"<EvaluationSet(id={self.id}, name={self.name}, target={self.target_type})>"
+
+
+class EvalItemDB(Base):
+    """Database model for individual evaluation items (Sprint 7 - P6.1)."""
+    
+    __tablename__ = "eval_items"
+    
+    id = Column(String, primary_key=True)
+    evaluation_set_id = Column(String, nullable=False, index=True)
+    tenant_id = Column(String, nullable=False, index=True)
+    
+    # Test case data
+    input_data = Column(JSON, nullable=False)  # Input data for the test case
+    expected_output = Column(JSON, nullable=False)  # Expected output/ground truth
+    actual_output = Column(JSON, nullable=True)  # Actual output from last run (if any)
+    
+    # Status and results
+    last_run_status = Column(String(20), nullable=True)  # passed, failed, error, not_run
+    last_run_score = Column(Float, nullable=True)  # Similarity score or accuracy (0.0-1.0)
+    last_run_at = Column(DateTime, nullable=True)
+    
+    # Metadata
+    item_metadata = Column(JSON, nullable=True)
+    is_deleted = Column(Boolean, nullable=False, default=False, index=True)
+    created_at = Column(DateTime, nullable=False, default=func.now())
+    updated_at = Column(DateTime, nullable=False, default=func.now(), onupdate=func.now())
+    
+    def __repr__(self) -> str:
+        return f"<EvalItem(id={self.id}, evaluation_set_id={self.evaluation_set_id}, status={self.last_run_status})>"
