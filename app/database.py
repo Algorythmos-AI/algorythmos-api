@@ -1,20 +1,12 @@
+"""Re-export database utilities from root-level database module.
+
+This module exists for backward compatibility and to avoid breaking
+existing imports from app.database.
+"""
+
 from __future__ import annotations
 
-import os
+# Import and re-export from root-level database module
+from database import Base, DATABASE_URL, engine, async_session_factory, get_session
 
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-from sqlalchemy.orm import DeclarativeBase
-
-# Shared declarative base for all models
-class Base(DeclarativeBase):
-    pass
-
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///./dev.db")
-
-engine = create_async_engine(DATABASE_URL, echo=False, future=True)
-async_session_factory = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
-
-
-async def get_session() -> AsyncSession:
-    async with async_session_factory() as session:
-        yield session
+__all__ = ["Base", "DATABASE_URL", "engine", "async_session_factory", "get_session"]
