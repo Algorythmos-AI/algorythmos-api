@@ -26,6 +26,8 @@ from pdf_usage_extractor.schemas import ExtractResponse, UsageRecord, ProcessorC
 from vendor_libs.services import vendor
 from vendor_libs.utils.runstore import run_store
 from vendor_libs.utils.security import parse_signature_header, verify_hmac_sha256, ReplaySet
+from vendor_libs.utils.observability import metrics_app, runs_started, runs_succeeded, runs_failed
+from prometheus_client import Counter, Histogram
 
 # Database imports - use direct module references to avoid package conflicts
 from sqlalchemy import select, and_
@@ -101,6 +103,95 @@ class FileSizeMiddleware(BaseHTTPMiddleware):
             )
         
         return await call_next(request)
+
+
+# Prometheus metrics for HTTP requests (initialized once)
+http_requests_total = None
+http_request_duration_seconds = None
+
+
+def _get_or_create_metrics():
+    """Get or create HTTP metrics (handles reloads in tests)."""
+    global http_requests_total, http_request_duration_seconds
+    
+    if http_requests_total is None:
+        try:
+            http_requests_total = Counter(
+                "http_requests_total",
+                "Total HTTP requests",
+                ["method", "endpoint", "status_code"]
+            )
+        except ValueError:
+            # Metric already registered (test reload)
+            from prometheus_client import REGISTRY
+            http_requests_total = REGISTRY._collector_to_names.get(
+                next((c for c in REGISTRY._collector_to_names if hasattr(c, '_name') and c._name == 'http_requests_total'), None)
+            )
+    
+    if http_request_duration_seconds is None:
+        try:
+            http_request_duration_seconds = Histogram(
+                "http_request_duration_seconds",
+                "HTTP request latency",
+                ["method", "endpoint", "status_code"],
+                buckets=(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0)
+            )
+        except ValueError:
+            # Metric already registered (test reload)
+            from prometheus_client import REGISTRY
+            http_request_duration_seconds = REGISTRY._collector_to_names.get(
+                next((c for c in REGISTRY._collector_to_names if hasattr(c, '_name') and c._name == 'http_request_duration_seconds'), None)
+            )
+    
+    return http_requests_total, http_request_duration_seconds
+
+
+class MetricsMiddleware(BaseHTTPMiddleware):
+    """Track HTTP request metrics for Prometheus."""
+    
+    async def dispatch(self, request: Request, call_next):  # type: ignore[override]
+        # Skip metrics endpoint itself to avoid recursion
+        if request.url.path in ("/metrics", "/api/metrics"):
+            return await call_next(request)
+        
+        start_time = time.time()
+        response = await call_next(request)
+        duration = time.time() - start_time
+        
+        # Normalize endpoint path for cardinality control
+        endpoint = self._normalize_path(request.url.path)
+        method = request.method
+        status_code = str(response.status_code)
+        
+        # Get or create metrics
+        requests_total, request_duration = _get_or_create_metrics()
+        
+        # Record metrics
+        if requests_total and request_duration:
+            requests_total.labels(method=method, endpoint=endpoint, status_code=status_code).inc()
+            request_duration.labels(method=method, endpoint=endpoint, status_code=status_code).observe(duration)
+        
+        return response
+    
+    def _normalize_path(self, path: str) -> str:
+        """Normalize path to reduce cardinality (replace IDs with placeholders)."""
+        # Remove /api prefix if present
+        if path.startswith("/api/"):
+            path = path[4:]
+        
+        parts = path.split("/")
+        normalized = []
+        
+        for i, part in enumerate(parts):
+            if not part:
+                continue
+            # Replace UUIDs and job IDs with placeholders
+            if len(part) > 20 and ("-" in part or part.startswith("job-") or part.startswith("run-")):
+                normalized.append("{id}")
+            else:
+                normalized.append(part)
+        
+        return "/" + "/".join(normalized) if normalized else path
 
 
 # Global state
@@ -372,6 +463,7 @@ def build_api() -> FastAPI:
         allow_headers=["Authorization", "Content-Type", "Idempotency-Key", "X-Request-ID", "*"],
         expose_headers=["X-Request-ID"],  # So the browser can read it for debugging
     )
+    app.add_middleware(MetricsMiddleware)
     app.add_middleware(FileSizeMiddleware)
     app.add_middleware(RequestContextMiddleware)
     
@@ -453,6 +545,12 @@ def build_api() -> FastAPI:
             return Response(status_code=204 if is_healthy else 502)
         except Exception:
             return Response(status_code=502)
+
+    # Prometheus metrics endpoint (public)
+    @app.get("/metrics", tags=["observability"])
+    async def metrics():
+        """Expose Prometheus metrics."""
+        return await metrics_app()()
 
     # File upload endpoint (protected)
     @app.post("/extract/upload", response_model=ExtractResponse)
@@ -876,6 +974,9 @@ def build_api() -> FastAPI:
             },
         )
         
+        # Increment run counter
+        runs_started.labels(processor=processor_name).inc()
+        
         return {
             "id": run.id,
             "processor_name": run.processor,
@@ -1083,6 +1184,12 @@ def build_api() -> FastAPI:
         run.output = output
         run.error = error
         await db.commit()
+
+        # Update metrics based on final status
+        if webhook_status == "succeeded":
+            runs_succeeded.labels(processor=run.processor).inc()
+        elif webhook_status == "failed":
+            runs_failed.labels(processor=run.processor).inc()
 
         logger.info(
             "Webhook processed",
