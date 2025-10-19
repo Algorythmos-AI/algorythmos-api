@@ -1472,6 +1472,148 @@ def build_api() -> FastAPI:
                 detail=build_error_response("extraction_error", f"Extraction failed: {str(e)}")
             )
 
+    # === PHASE 3: Classification Endpoint ===
+    
+    @app.post(
+        "/classify",
+        tags=["classification"],
+        summary="Classify document text",
+        description="Classify document content into categories using keyword-based classification.",
+    )
+    async def classify_document(
+        request: Request,
+        text: str = Body(..., description="Text content to classify"),
+        classifier_id: Optional[str] = Body(None, description="Optional specific classifier to use"),
+        tenant_ctx: Dict[str, str] = Depends(require_key),
+        session: AsyncSession = Depends(get_session),
+    ):
+        """
+        Classify document text into categories.
+        
+        Uses classifier configurations with keyword matching to determine document categories.
+        Returns classifications with confidence scores and matched keywords.
+        """
+        from core.config import build_error_response
+        from document_processing.services import classification_service
+        
+        tenant_id = tenant_ctx["tenant"]
+        
+        try:
+            result = await classification_service.classify_document(
+                db=session,
+                tenant_id=tenant_id,
+                text=text,
+                classifier_id=classifier_id
+            )
+            
+            logger.info(
+                "Document classification completed",
+                extra={
+                    "context": {
+                        "classifier_id": classifier_id,
+                        "classifiers_used": result["classifiers_used"],
+                        "top_category": result["top_category"],
+                        "classifications_count": len(result["classifications"]),
+                        "tenant_id": tenant_id,
+                    }
+                }
+            )
+            
+            return result
+            
+        except ValueError as e:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=build_error_response("resource_not_found", str(e))
+            )
+        except Exception as e:
+            logger.error(
+                "Document classification failed",
+                extra={
+                    "context": {
+                        "classifier_id": classifier_id,
+                        "error": str(e),
+                        "tenant_id": tenant_id,
+                    }
+                },
+                exc_info=True
+            )
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=build_error_response("classification_error", f"Classification failed: {str(e)}")
+            )
+
+    # === PHASE 3: Splitting Endpoint ===
+    
+    @app.post(
+        "/split",
+        tags=["splitting"],
+        summary="Split document text",
+        description="Split document content into chunks using rule-based splitting strategies.",
+    )
+    async def split_document(
+        request: Request,
+        text: str = Body(..., description="Text content to split"),
+        splitter_id: Optional[str] = Body(None, description="Optional specific splitter to use"),
+        tenant_ctx: Dict[str, str] = Depends(require_key),
+        session: AsyncSession = Depends(get_session),
+    ):
+        """
+        Split document text into chunks.
+        
+        Uses splitter configurations with various strategies (delimiter, pattern, fixed_size, paragraph)
+        to split documents into manageable chunks. Returns chunks with position metadata.
+        """
+        from core.config import build_error_response
+        from document_processing.services import splitting_service
+        
+        tenant_id = tenant_ctx["tenant"]
+        
+        try:
+            result = await splitting_service.split_document(
+                db=session,
+                tenant_id=tenant_id,
+                text=text,
+                splitter_id=splitter_id
+            )
+            
+            logger.info(
+                "Document splitting completed",
+                extra={
+                    "context": {
+                        "splitter_id": result["splitter_id"],
+                        "split_strategy": result["split_strategy"],
+                        "chunk_count": result["chunk_count"],
+                        "original_length": result["original_length"],
+                        "tenant_id": tenant_id,
+                    }
+                }
+            )
+            
+            return result
+            
+        except ValueError as e:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=build_error_response("resource_not_found", str(e))
+            )
+        except Exception as e:
+            logger.error(
+                "Document splitting failed",
+                extra={
+                    "context": {
+                        "splitter_id": splitter_id,
+                        "error": str(e),
+                        "tenant_id": tenant_id,
+                    }
+                },
+                exc_info=True
+            )
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=build_error_response("splitting_error", f"Splitting failed: {str(e)}")
+            )
+
     # File upload endpoint (protected)
     @app.post(
         "/extract/upload",
