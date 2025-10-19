@@ -14,6 +14,8 @@ from document_processing.services import file_service
 from document_processing.services.classification_service import classify_document
 from document_processing.services.splitting_service import split_document
 from document_processing.services.regex_extractor_service import extract_with_regex
+from document_processing.services.format_handlers import format_detector
+from document_processing.services.llm_service import llm_service
 
 
 async def create_parser_run(
@@ -125,14 +127,28 @@ async def execute_parser_run(
         
         file_content = await file_service.get_file_content(file_db)
         
-        # Detect content type - for now assume text
-        # In production, would use file type detection
-        if file_db.content_type == "application/pdf":
-            # Would extract text from PDF here
-            # For now, just use placeholder
-            text = "[PDF content extraction not yet implemented]"
-        else:
-            # Assume text file
+        # PHASE 5: Use format handlers for multi-format support
+        try:
+            text = format_detector.extract_text(
+                file_content,
+                file_db.content_type,
+                file_db.filename
+            )
+            
+            # Extract format-specific metadata
+            format_metadata = format_detector.extract_metadata(
+                file_content,
+                file_db.content_type,
+                file_db.filename
+            )
+            
+            # Add to run metadata
+            if not run_db.run_metadata:
+                run_db.run_metadata = {}
+            run_db.run_metadata["format_metadata"] = format_metadata
+            
+        except Exception as e:
+            # Fallback to simple text decoding
             text = file_content.decode("utf-8", errors="ignore")
         
         # Step 1: Classification (if classifier specified)
@@ -163,6 +179,32 @@ async def execute_parser_run(
                 "citations": extraction_result.get("citations", [])
             }
             confidence_score = int(extraction_result.get("confidence", 0) * 100)
+            
+            # PHASE 5: Optional LLM post-processing
+            use_llm = run_db.run_metadata.get("use_llm_post_processing", False)
+            if use_llm:
+                # Get schema for LLM context
+                from document_processing.services.schema_service import SchemaService
+                schema_service = SchemaService(session)
+                schema = await schema_service.get_schema(tenant_id, run_db.schema_id)
+                
+                if schema:
+                    llm_result = await llm_service.post_process_extraction(
+                        extraction_result,
+                        text,
+                        schema.model_dump()
+                    )
+                    
+                    # Merge LLM enhancements
+                    extracted_data["llm_enhanced"] = True
+                    extracted_data["validated_fields"] = llm_result.get("validated_fields", {})
+                    extracted_data["inferred_fields"] = llm_result.get("inferred_fields", {})
+                    extracted_data["entities"] = llm_result.get("entities", [])
+                    
+                    # Update confidence if LLM provided better score
+                    if llm_result.get("overall_confidence"):
+                        confidence_score = int(llm_result["overall_confidence"] * 100)
+            
             run_db.extracted_data = extracted_data
             run_db.confidence_score = confidence_score
         

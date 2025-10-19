@@ -1984,6 +1984,107 @@ def build_api() -> FastAPI:
             }
 
     # =============================================================================
+    # PHASE 5: LLM Processing Endpoints
+    # =============================================================================
+
+    @app.post(
+        "/llm/summarize",
+        response_model=Dict[str, Any],
+        tags=["llm"],
+        summary="Summarize document",
+        description="Generate a summary of document text using LLM"
+    )
+    async def llm_summarize(
+        request: Request,
+        text: str = Body(..., description="Text to summarize"),
+        max_length: int = Body(500, description="Maximum summary length"),
+        style: str = Body("concise", description="Summary style: concise, detailed, bullet_points"),
+        tenant_ctx: Dict[str, str] = Depends(require_key)
+    ) -> Dict[str, Any]:
+        """Generate document summary using LLM."""
+        try:
+            from document_processing.services.llm_service import llm_service
+            
+            result = await llm_service.summarize(text, max_length, style)
+            
+            return result
+            
+        except Exception as e:
+            logger.error(
+                "LLM summarization failed",
+                extra={"context": {"error": str(e)}},
+                exc_info=True
+            )
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=build_error_response("llm_error", f"Summarization failed: {str(e)}")
+            )
+
+    @app.post(
+        "/llm/extract-entities",
+        response_model=Dict[str, Any],
+        tags=["llm"],
+        summary="Extract entities",
+        description="Extract named entities from text using LLM"
+    )
+    async def llm_extract_entities(
+        request: Request,
+        text: str = Body(..., description="Text to analyze"),
+        entity_types: Optional[List[str]] = Body(None, description="Entity types to extract"),
+        tenant_ctx: Dict[str, str] = Depends(require_key)
+    ) -> Dict[str, Any]:
+        """Extract named entities using LLM."""
+        try:
+            from document_processing.services.llm_service import llm_service
+            
+            result = await llm_service.extract_entities(text, entity_types)
+            
+            return result
+            
+        except Exception as e:
+            logger.error(
+                "LLM entity extraction failed",
+                extra={"context": {"error": str(e)}},
+                exc_info=True
+            )
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=build_error_response("llm_error", f"Entity extraction failed: {str(e)}")
+            )
+
+    @app.post(
+        "/llm/answer-questions",
+        response_model=Dict[str, Any],
+        tags=["llm"],
+        summary="Answer questions about document",
+        description="Answer questions about document content using LLM"
+    )
+    async def llm_answer_questions(
+        request: Request,
+        text: str = Body(..., description="Document text"),
+        questions: List[str] = Body(..., description="Questions to answer"),
+        tenant_ctx: Dict[str, str] = Depends(require_key)
+    ) -> Dict[str, Any]:
+        """Answer questions about document using LLM."""
+        try:
+            from document_processing.services.llm_service import llm_service
+            
+            result = await llm_service.answer_questions(text, questions)
+            
+            return result
+            
+        except Exception as e:
+            logger.error(
+                "LLM question answering failed",
+                extra={"context": {"error": str(e)}},
+                exc_info=True
+            )
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=build_error_response("llm_error", f"Question answering failed: {str(e)}")
+            )
+
+    # =============================================================================
     # Original Legacy Endpoints
     # =============================================================================
 
