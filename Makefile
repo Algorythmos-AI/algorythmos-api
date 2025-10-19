@@ -104,3 +104,11 @@ stage6b-gate: ## Start server, run Stage-6B observability tests, clean up
 stage6c-gate: ## Start server, run Stage-6C OpenAPI tests, clean up
 	@chmod +x scripts/stage6c_gate.sh
 	@./scripts/stage6c_gate.sh
+
+stage7-gate: ## Run Stage-7 tests (pytest+respx)
+	@chmod +x scripts/stage7_gate.sh
+	@./scripts/stage7_gate.sh
+
+stage8-gate: ## Start server, run Stage-8 runs index tests
+	@chmod +x scripts/stage8_gate.sh
+	@./scripts/stage8_gate.sh

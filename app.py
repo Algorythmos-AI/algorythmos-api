@@ -8,6 +8,7 @@ import os
 import secrets
 import tempfile
 import time
+from base64 import urlsafe_b64decode, urlsafe_b64encode
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock
@@ -26,7 +27,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.params import Body, Query
 from pydantic import AnyHttpUrl, BaseModel, ConfigDict
 from starlette.middleware.base import BaseHTTPMiddleware
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -214,6 +215,42 @@ def _build_run_response(run: Run) -> Dict[str, Any]:
         "updated_at": _normalize_iso(run.updated_at),
         "vendor_job_id": run.vendor_job_id,
         "idempotency_key": run.idempotency_key,
+    }
+
+
+_RUN_STATUS_VALUES = {"queued", "running", "succeeded", "failed"}
+
+
+def _encode_run_cursor(created_at: datetime, run_id: str) -> str:
+    payload = {"t": created_at.isoformat(), "id": run_id}
+    return urlsafe_b64encode(json.dumps(payload).encode("utf-8")).decode("utf-8")
+
+
+def _decode_run_cursor(token: str) -> tuple[datetime, str]:
+    try:
+        decoded = urlsafe_b64decode(token.encode("utf-8")).decode("utf-8")
+        data = json.loads(decoded)
+        cursor_ts = data["t"]
+        cursor_id = data["id"]
+        if not isinstance(cursor_ts, str) or not isinstance(cursor_id, str):
+            raise ValueError("Malformed cursor payload")
+        cursor_dt = datetime.fromisoformat(cursor_ts)
+    except Exception as exc:  # noqa: BLE001 - treat all parsing errors equally
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "INVALID_CURSOR", "message": "Cursor is invalid"},
+        ) from exc
+    return cursor_dt, cursor_id
+
+
+def _summarize_run(run: Run) -> Dict[str, Any]:
+    return {
+        "id": run.id,
+        "processor": run.processor,
+        "status": run.status,
+        "created_at": _normalize_iso(run.created_at),
+        "has_output": bool(run.output),
+        "has_error": bool(run.error),
     }
 
 
@@ -895,62 +932,102 @@ def build_api() -> FastAPI:
                 )
                 return cached_response
 
+        existing_run: Optional[Run] = None
+        if idem_key:
+            stmt = select(Run).where(
+                Run.tenant_id == tenant_id,
+                Run.processor == processor_name,
+                Run.idempotency_key == idem_key,
+            )
+            result = await session.execute(stmt)
+            existing_run = result.scalar_one_or_none()
+
+        if existing_run:
+            await _close_uploads(uploads)
+            _sync_run_cache(existing_run)
+            if hasattr(request.state, "log_context"):
+                request.state.log_context.update({"run_id": existing_run.id, "processor": processor_name})
+            response_payload = _build_run_response(existing_run)
+            if cache_key:
+                idem_cache.put(cache_key, response_payload)
+            return response_payload
+
         if is_json_body and not uploads:
             payload_data = await request.json()
             payload = JobCreate.model_validate(payload_data)
 
-            run_id = str(uuid4())
-            job_record = JobRecord(
-                job_id=run_id,
+            run = Run(
+                id=f"run_{secrets.token_hex(6)}",
+                processor=processor_name,
+                tenant_id=tenant_id,
                 status="queued",
+                idempotency_key=idem_key,
+            )
+            session.add(run)
+            try:
+                await session.commit()
+            except IntegrityError:
+                await session.rollback()
+                stmt = select(Run).where(
+                    Run.tenant_id == tenant_id,
+                    Run.processor == processor_name,
+                    Run.idempotency_key == idem_key,
+                )
+                result = await session.execute(stmt)
+                run = result.scalar_one()
+            else:
+                await session.refresh(run)
+
+            job_record = JobRecord(
+                job_id=run.id,
+                status=run.status,
                 tenant_id=tenant_id,
                 request_id=getattr(request.state, "request_id", None),
                 created_at=_utcnow(),
                 updated_at=_utcnow(),
                 webhook_url=payload.webhook_url,
             )
-            _jobs[run_id] = job_record
+            _jobs[run.id] = job_record
+            background_tasks.add_task(_execute_job, run.id, payload, tenant_id, job_record.request_id)
 
-            background_tasks.add_task(_execute_job, run_id, payload, tenant_id, job_record.request_id)
+            if hasattr(request.state, "log_context"):
+                request.state.log_context.update({"run_id": run.id, "processor": processor_name})
+            runs_started.labels(processor_name).inc()
 
-        response_payload = {
-            "id": run_id,
-            "run_id": run_id,
-            "processor": processor_name,
-            "processor_name": processor_name,
-            "status": job_record.status,
-            "created_at": job_record.created_at.isoformat(),
-            "tenant_id": tenant_id,
-        }
-        if idem_key:
-            response_payload["idempotency_key"] = idem_key
+            snapshot = _sync_run_cache(run)
+            snapshot.setdefault("processor_name", processor_name)
+            snapshot.setdefault("tenant_id", tenant_id)
 
-        if hasattr(request.state, "log_context"):
-            request.state.log_context.update({"run_id": run_id, "processor": processor_name})
-        runs_started.labels(processor_name).inc()
+            response_payload: Dict[str, Any] = {
+                "id": run.id,
+                "run_id": run.id,
+                "processor": processor_name,
+                "processor_name": processor_name,
+                "status": run.status,
+                "created_at": _normalize_iso(run.created_at),
+                "updated_at": _normalize_iso(run.updated_at),
+                "tenant_id": tenant_id,
+            }
+            if idem_key:
+                response_payload["idempotency_key"] = idem_key
 
-        run_snapshot = dict(response_payload)
-        run_snapshot["updated_at"] = job_record.updated_at.isoformat()
-        run_store.put_run(run_id, run_snapshot)
-        _processor_runs[run_id] = dict(run_snapshot)
+            if cache_key:
+                idem_cache.put(cache_key, response_payload)
 
-        logger.info(
-            "Processor run queued",
-            extra={
-                "context": {
-                    "run_id": run_id,
-                    "processor": processor_name,
-                    "tenant_id": tenant_id,
-                    "request_id": job_record.request_id,
-                    "api_version": x_api_version,
-                }
-            },
-        )
+            logger.info(
+                "Processor run queued",
+                extra={
+                    "context": {
+                        "run_id": run.id,
+                        "processor": processor_name,
+                        "tenant_id": tenant_id,
+                        "request_id": job_record.request_id,
+                        "api_version": x_api_version,
+                    }
+                },
+            )
 
-        if cache_key:
-            idem_cache.put(cache_key, response_payload)
-
-        return response_payload
+            return response_payload
 
         if not uploads:
             raise HTTPException(
@@ -975,26 +1052,6 @@ def build_api() -> FastAPI:
                         "message": f"Unsupported content type {upload.content_type!r}; only application/pdf is allowed",
                     },
                 )
-
-        existing_run: Optional[Run] = None
-        if idem_key:
-            stmt = select(Run).where(
-                Run.tenant_id == tenant_id,
-                Run.processor == processor_name,
-                Run.idempotency_key == idem_key,
-            )
-            result = await session.execute(stmt)
-            existing_run = result.scalar_one_or_none()
-
-        if existing_run:
-            await _close_uploads(uploads)
-            _sync_run_cache(existing_run)
-            if hasattr(request.state, "log_context"):
-                request.state.log_context.update({"run_id": existing_run.id, "processor": processor_name})
-            response_payload = _build_run_response(existing_run)
-            if cache_key:
-                idem_cache.put(cache_key, response_payload)
-            return response_payload
 
         run_id = f"run_{secrets.token_hex(6)}"
         run = Run(
@@ -1133,6 +1190,66 @@ def build_api() -> FastAPI:
             idem_cache.put(cache_key, response_payload)
 
         return response_payload
+
+    @app.get(
+        "/processors/{processor_name}/runs",
+        tags=["runs"],
+    )
+    async def list_processor_runs(
+        processor_name: str,
+        status_filter: Optional[str] = Query(None, alias="status", description="Filter by run status"),
+        limit: int = Query(50, ge=1, le=100, description="Number of runs to return"),
+        cursor: Optional[str] = Query(None, description="Opaque cursor returned by a previous page"),
+        tenant_ctx: Dict[str, str] = Depends(require_key),
+        session: AsyncSession = Depends(get_session),
+    ) -> Dict[str, Any]:
+        """List processor runs with keyset pagination."""
+
+        tenant_id = tenant_ctx.get("tenant") or "public"
+
+        if status_filter and status_filter not in _RUN_STATUS_VALUES:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "code": "INVALID_STATUS",
+                    "message": f"Unsupported status filter: {status_filter}",
+                },
+            )
+
+        filters = [Run.processor == processor_name, Run.tenant_id == tenant_id]
+        if status_filter:
+            filters.append(Run.status == status_filter)
+
+        stmt = select(Run).where(*filters)
+
+        if cursor:
+            cursor_dt, cursor_id = _decode_run_cursor(cursor)
+            stmt = stmt.where(
+                or_(
+                    Run.created_at < cursor_dt,
+                    and_(Run.created_at == cursor_dt, Run.id < cursor_id),
+                )
+            )
+
+        stmt = stmt.order_by(Run.created_at.desc(), Run.id.desc()).limit(limit + 1)
+
+        rows = (await session.execute(stmt)).scalars().all()
+
+        has_more = len(rows) > limit
+        items = rows[:limit]
+
+        next_cursor: Optional[str] = None
+        if has_more and items:
+            last = items[-1]
+            if last.created_at is not None:
+                next_cursor = _encode_run_cursor(last.created_at, last.id)
+            else:
+                next_cursor = _encode_run_cursor(datetime.now(timezone.utc), last.id)
+
+        return {
+            "items": [_summarize_run(run) for run in items],
+            "next_cursor": next_cursor,
+        }
 
     @app.get(
         "/processors/{processor_name}/runs/{run_id}",
