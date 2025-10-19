@@ -20,6 +20,7 @@ class ExtractionSchemaDB(Base):
     fields = Column(JSON, nullable=False)  # List of FieldDefinition dicts
     version = Column(Integer, nullable=False, default=1)
     schema_metadata = Column(JSON, nullable=True)  # Renamed from 'metadata' to avoid SQLAlchemy reserved word
+    is_deleted = Column(Boolean, nullable=False, default=False, index=True)
     created_at = Column(DateTime, nullable=False, default=func.now())
     updated_at = Column(DateTime, nullable=False, default=func.now(), onupdate=func.now())
     
@@ -40,6 +41,7 @@ class ExtractorDB(Base):
     enabled = Column(Boolean, nullable=False, default=True)
     priority = Column(Integer, nullable=False, default=100)
     rules = Column(JSON, nullable=False)  # Type-specific extraction rules
+    is_deleted = Column(Boolean, nullable=False, default=False, index=True)
     created_at = Column(DateTime, nullable=False, default=func.now())
     updated_at = Column(DateTime, nullable=False, default=func.now(), onupdate=func.now())
     
@@ -59,6 +61,7 @@ class ClassifierDB(Base):
     enabled = Column(Boolean, nullable=False, default=True)
     categories = Column(JSON, nullable=False)  # List of possible categories
     rules = Column(JSON, nullable=False)  # Type-specific classification rules
+    is_deleted = Column(Boolean, nullable=False, default=False, index=True)
     created_at = Column(DateTime, nullable=False, default=func.now())
     updated_at = Column(DateTime, nullable=False, default=func.now(), onupdate=func.now())
     
@@ -77,6 +80,7 @@ class SplitterDB(Base):
     type = Column(String(20), nullable=False)  # page, section, pattern, size
     enabled = Column(Boolean, nullable=False, default=True)
     rules = Column(JSON, nullable=False)  # Type-specific splitting rules
+    is_deleted = Column(Boolean, nullable=False, default=False, index=True)
     created_at = Column(DateTime, nullable=False, default=func.now())
     updated_at = Column(DateTime, nullable=False, default=func.now(), onupdate=func.now())
     
