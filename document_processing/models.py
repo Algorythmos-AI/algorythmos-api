@@ -181,3 +181,134 @@ class ParserRunDB(Base):
     
     def __repr__(self) -> str:
         return f"<ParserRun(id={self.id}, file_id={self.file_id}, status={self.status})>"
+
+
+class WebhookDB(Base):
+    """Database model for webhook subscriptions."""
+    
+    __tablename__ = "webhooks"
+    
+    id = Column(String, primary_key=True)
+    tenant_id = Column(String, nullable=False, index=True)
+    name = Column(String(100), nullable=False)
+    url = Column(String(500), nullable=False)
+    events = Column(JSON, nullable=False)  # List of event types to subscribe to
+    enabled = Column(Boolean, nullable=False, default=True)
+    secret = Column(String(100), nullable=True)  # Secret for signature verification
+    
+    # Delivery settings
+    max_retries = Column(Integer, nullable=False, default=3)
+    timeout_seconds = Column(Integer, nullable=False, default=30)
+    
+    # Statistics
+    last_triggered_at = Column(DateTime, nullable=True)
+    total_deliveries = Column(Integer, nullable=False, default=0)
+    successful_deliveries = Column(Integer, nullable=False, default=0)
+    failed_deliveries = Column(Integer, nullable=False, default=0)
+    
+    # Metadata
+    webhook_metadata = Column(JSON, nullable=True)
+    is_deleted = Column(Boolean, nullable=False, default=False, index=True)
+    created_at = Column(DateTime, nullable=False, default=func.now())
+    updated_at = Column(DateTime, nullable=False, default=func.now(), onupdate=func.now())
+    
+    def __repr__(self) -> str:
+        return f"<Webhook(id={self.id}, name={self.name}, url={self.url})>"
+
+
+class WebhookDeliveryDB(Base):
+    """Database model for webhook delivery attempts."""
+    
+    __tablename__ = "webhook_deliveries"
+    
+    id = Column(String, primary_key=True)
+    webhook_id = Column(String, nullable=False, index=True)
+    event_type = Column(String(50), nullable=False, index=True)
+    payload = Column(JSON, nullable=False)
+    
+    # Delivery status
+    status = Column(String(20), nullable=False, index=True)  # pending, success, failed, retrying
+    attempt_count = Column(Integer, nullable=False, default=0)
+    
+    # Response details
+    response_status_code = Column(Integer, nullable=True)
+    response_body = Column(Text, nullable=True)
+    error_message = Column(Text, nullable=True)
+    
+    # Timing
+    scheduled_at = Column(DateTime, nullable=False, default=func.now())
+    attempted_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+    next_retry_at = Column(DateTime, nullable=True)
+    
+    created_at = Column(DateTime, nullable=False, default=func.now())
+    updated_at = Column(DateTime, nullable=False, default=func.now(), onupdate=func.now())
+    
+    def __repr__(self) -> str:
+        return f"<WebhookDelivery(id={self.id}, webhook_id={self.webhook_id}, status={self.status})>"
+
+
+class ProcessorDB(Base):
+    """Database model for processors (custom processing plugins)."""
+    
+    __tablename__ = "processors"
+    
+    id = Column(String, primary_key=True)
+    tenant_id = Column(String, nullable=False, index=True)
+    name = Column(String(100), nullable=False)
+    description = Column(String(500), nullable=True)
+    processor_type = Column(String(50), nullable=False)  # 'extractor', 'transformer', 'validator', 'custom'
+    implementation = Column(JSON, nullable=False)  # Contains code, config, or reference
+    input_schema = Column(JSON, nullable=True)  # Expected input format
+    output_schema = Column(JSON, nullable=True)  # Expected output format
+    enabled = Column(Boolean, nullable=False, default=True)
+    version = Column(Integer, nullable=False, default=1)
+    processor_metadata = Column(JSON, nullable=True)
+    is_deleted = Column(Boolean, nullable=False, default=False, index=True)
+    created_at = Column(DateTime, nullable=False, default=func.now())
+    updated_at = Column(DateTime, nullable=False, default=func.now(), onupdate=func.now())
+    
+    def __repr__(self) -> str:
+        return f"<Processor(id={self.id}, name={self.name}, type={self.processor_type})>"
+
+
+class WorkflowDB(Base):
+    """Database model for workflows (chains of processors)."""
+    
+    __tablename__ = "workflows"
+    
+    id = Column(String, primary_key=True)
+    tenant_id = Column(String, nullable=False, index=True)
+    name = Column(String(100), nullable=False)
+    description = Column(String(500), nullable=True)
+    steps = Column(JSON, nullable=False)  # List of workflow steps with processor references
+    enabled = Column(Boolean, nullable=False, default=True)
+    version = Column(Integer, nullable=False, default=1)
+    workflow_metadata = Column(JSON, nullable=True)
+    is_deleted = Column(Boolean, nullable=False, default=False, index=True)
+    created_at = Column(DateTime, nullable=False, default=func.now())
+    updated_at = Column(DateTime, nullable=False, default=func.now(), onupdate=func.now())
+    
+    def __repr__(self) -> str:
+        return f"<Workflow(id={self.id}, name={self.name})>"
+
+
+class EvaluationSetDB(Base):
+    """Database model for evaluation sets (test datasets)."""
+    
+    __tablename__ = "evaluation_sets"
+    
+    id = Column(String, primary_key=True)
+    tenant_id = Column(String, nullable=False, index=True)
+    name = Column(String(100), nullable=False)
+    description = Column(String(500), nullable=True)
+    test_cases = Column(JSON, nullable=False)  # List of test cases with input/expected output
+    target_type = Column(String(50), nullable=False)  # 'processor', 'workflow', 'extractor', 'schema'
+    target_id = Column(String, nullable=True)  # ID of target processor/workflow/etc.
+    evaluation_metadata = Column(JSON, nullable=True)  # Results, metrics, etc.
+    is_deleted = Column(Boolean, nullable=False, default=False, index=True)
+    created_at = Column(DateTime, nullable=False, default=func.now())
+    updated_at = Column(DateTime, nullable=False, default=func.now(), onupdate=func.now())
+    
+    def __repr__(self) -> str:
+        return f"<EvaluationSet(id={self.id}, name={self.name}, target={self.target_type})>"
