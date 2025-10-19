@@ -27,6 +27,18 @@ from vendor_libs.services import vendor
 from vendor_libs.utils.runstore import run_store
 from vendor_libs.utils.security import parse_signature_header, verify_hmac_sha256, ReplaySet
 
+# Database imports - use direct module references to avoid package conflicts
+from sqlalchemy import select, and_
+from sqlalchemy.ext.asyncio import AsyncSession
+
+# These will be imported after app.database and app.models modules are available
+# to avoid circular dependencies during app package initialization
+async_session_factory = None
+engine = None
+get_session = None
+Base = None
+Run = None
+
 
 class PathRequest(BaseModel):
     input_path: str
@@ -329,6 +341,20 @@ async def _execute_job(job_id: str, payload: JobCreate, tenant_id: str, request_
 
 def build_api() -> FastAPI:
     """Build and configure the FastAPI application."""
+    # Initialize database module references
+    global async_session_factory, engine, get_session, Base, Run
+    try:
+        import app.database as db_module
+        import app.models as models_module
+        async_session_factory = db_module.async_session_factory
+        engine = db_module.engine
+        get_session = db_module.get_session
+        Base = models_module.Base
+        Run = models_module.Run
+    except ImportError:
+        # Database modules not available - tests may provide mocks
+        pass
+    
     app = FastAPI(
         title="PDF Usage Extraction Service",
         version="0.1.0",
@@ -356,7 +382,11 @@ def build_api() -> FastAPI:
 
     @app.on_event("startup")
     async def startup_event() -> None:
-        """Log service startup information."""
+        """Log service startup information and initialize database."""
+        # Initialize database tables
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        
         versions = {
             "service": app.version,
         }
@@ -634,6 +664,7 @@ def build_api() -> FastAPI:
         tenant_ctx: Dict[str, str] = Depends(require_key),
         x_api_version: Optional[str] = Header(default=None),
         idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
+        db: AsyncSession = Depends(get_session),
     ) -> Dict[str, Any]:
         """Create a processor run (Algorythmos-style endpoint)."""
         # Log API version if provided
@@ -643,17 +674,9 @@ def build_api() -> FastAPI:
                 extra={"context": {"version": x_api_version, "processor": processor_name}},
             )
 
-        # Check idempotency key - return existing run if found
-        if idempotency_key:
-            existing = run_store.get_run(idempotency_key)
-            if existing:
-                logger.info(
-                    "Idempotent run reused",
-                    extra={"context": {"idempotency_key": idempotency_key, "run_id": existing["id"]}},
-                )
-                return existing
+        tenant_id = tenant_ctx["tenant"]
 
-        # Validate file count
+        # Validate file count first (cheap check)
         if len(files) > RUN_MAX_FILES:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -662,6 +685,86 @@ def build_api() -> FastAPI:
                     "message": f"Too many files: {len(files)} exceeds limit of {RUN_MAX_FILES}",
                 }
             )
+
+        # Check idempotency key - return existing run if found
+        # Do this BEFORE file validation/upload to avoid unnecessary work
+        if idempotency_key:
+            stmt = select(Run).where(
+                and_(
+                    Run.tenant_id == tenant_id,
+                    Run.processor == processor_name,
+                    Run.idempotency_key == idempotency_key,
+                )
+            )
+            result = await db.execute(stmt)
+            existing = result.scalar_one_or_none()
+            if existing:
+                logger.info(
+                    "Idempotent run reused",
+                    extra={"context": {"idempotency_key": idempotency_key, "run_id": existing.id}},
+                )
+                return {
+                    "id": existing.id,
+                    "processor_name": existing.processor,
+                    "status": existing.status,
+                    "created_at": existing.created_at.isoformat(),
+                    "updated_at": existing.updated_at.isoformat(),
+                    "tenant_id": existing.tenant_id,
+                    "output": existing.output,
+                    "error": existing.error,
+                    "vendor_job_id": existing.vendor_job_id,
+                }
+            
+            # Create placeholder record to claim the idempotency key
+            # This prevents race conditions in concurrent requests
+            run_id = str(uuid4())
+            placeholder = Run(
+                id=run_id,
+                processor=processor_name,
+                tenant_id=tenant_id,
+                status="pending",  # Temporary status
+                vendor_job_id=None,
+                idempotency_key=idempotency_key,
+                output=None,
+                error=None,
+            )
+            db.add(placeholder)
+            try:
+                await db.commit()
+                await db.refresh(placeholder)
+            except Exception:
+                # Another request beat us to it - fetch and return that run
+                await db.rollback()
+                stmt = select(Run).where(
+                    and_(
+                        Run.tenant_id == tenant_id,
+                        Run.processor == processor_name,
+                        Run.idempotency_key == idempotency_key,
+                    )
+                )
+                result = await db.execute(stmt)
+                existing = result.scalar_one_or_none()
+                if existing:
+                    logger.info(
+                        "Idempotent run reused (race condition)",
+                        extra={"context": {"idempotency_key": idempotency_key, "run_id": existing.id}},
+                    )
+                    return {
+                        "id": existing.id,
+                        "processor_name": existing.processor,
+                        "status": existing.status,
+                        "created_at": existing.created_at.isoformat(),
+                        "updated_at": existing.updated_at.isoformat(),
+                        "tenant_id": existing.tenant_id,
+                        "output": existing.output,
+                        "error": existing.error,
+                        "vendor_job_id": existing.vendor_job_id,
+                    }
+                # This shouldn't happen, but re-raise if it does
+                raise
+        else:
+            # No idempotency key, just generate a new run ID
+            run_id = str(uuid4())
 
         # Validate each file
         file_data = []
@@ -719,10 +822,9 @@ def build_api() -> FastAPI:
             ) from exc
 
         # Create vendor job
-        run_id = idempotency_key or str(uuid4())
         try:
             job_payload = {"processor_name": processor_name}
-            vendor_job = await vendor.create_job(input_path, job_payload, tenant_id=tenant_ctx["tenant"])
+            vendor_job = await vendor.create_job(input_path, job_payload, tenant_id=tenant_id)
             vendor_job_id = vendor_job.get("job_id")
         except Exception as exc:
             raise HTTPException(
@@ -733,22 +835,31 @@ def build_api() -> FastAPI:
                 }
             ) from exc
 
-        # Store run metadata
-        run_record = {
-            "id": run_id,
-            "processor_name": processor_name,
-            "status": "queued",
-            "created_at": _utcnow().isoformat(),
-            "updated_at": _utcnow().isoformat(),
-            "tenant_id": tenant_ctx["tenant"],
-            "file_count": len(file_data),
-            "vendor_job_id": vendor_job_id,
-        }
-        run_store.put_run(run_id, run_record)
-        
-        # Link vendor job to run
-        if vendor_job_id:
-            run_store.link_vendor_job(vendor_job_id, run_id)
+        # Update database record (either placeholder or new record)
+        if idempotency_key:
+            # Update the placeholder we created earlier
+            stmt = select(Run).where(Run.id == run_id)
+            result = await db.execute(stmt)
+            run = result.scalar_one()
+            run.status = "queued"
+            run.vendor_job_id = vendor_job_id
+            await db.commit()
+            await db.refresh(run)
+        else:
+            # Create a new record (no idempotency key)
+            run = Run(
+                id=run_id,
+                processor=processor_name,
+                tenant_id=tenant_id,
+                status="queued",
+                vendor_job_id=vendor_job_id,
+                idempotency_key=None,
+                output=None,
+                error=None,
+            )
+            db.add(run)
+            await db.commit()
+            await db.refresh(run)
 
         logger.info(
             "Processor run queued",
@@ -756,7 +867,7 @@ def build_api() -> FastAPI:
                 "context": {
                     "run_id": run_id,
                     "processor": processor_name,
-                    "tenant_id": tenant_ctx["tenant"],
+                    "tenant_id": tenant_id,
                     "request_id": getattr(request.state, "request_id", None),
                     "api_version": x_api_version,
                     "file_count": len(file_data),
@@ -765,7 +876,17 @@ def build_api() -> FastAPI:
             },
         )
         
-        return run_record
+        return {
+            "id": run.id,
+            "processor_name": run.processor,
+            "status": run.status,
+            "created_at": run.created_at.isoformat(),
+            "updated_at": run.updated_at.isoformat(),
+            "tenant_id": run.tenant_id,
+            "output": run.output,
+            "error": run.error,
+            "vendor_job_id": run.vendor_job_id,
+        }
 
     @app.get("/processors/{processor_name}/runs/{run_id}")
     async def get_processor_run(
@@ -773,16 +894,36 @@ def build_api() -> FastAPI:
         run_id: str,
         tenant_ctx: Dict[str, str] = Depends(require_key),
         x_api_version: Optional[str] = Header(default=None),
+        db: AsyncSession = Depends(get_session),
     ) -> Dict[str, Any]:
         """Get processor run status and results (Algorythmos-style endpoint)."""
-        run = run_store.get_run(run_id)
-        if not run or run.get("tenant_id") != tenant_ctx["tenant"]:
+        stmt = select(Run).where(
+            and_(
+                Run.id == run_id,
+                Run.tenant_id == tenant_ctx["tenant"],
+                Run.processor == processor_name,
+            )
+        )
+        result = await db.execute(stmt)
+        run = result.scalar_one_or_none()
+        
+        if not run:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, 
                 detail={"code": "RUN_NOT_FOUND", "message": "Run not found"}
             )
         
-        return run
+        return {
+            "id": run.id,
+            "processor_name": run.processor,
+            "status": run.status,
+            "created_at": run.created_at.isoformat(),
+            "updated_at": run.updated_at.isoformat(),
+            "tenant_id": run.tenant_id,
+            "output": run.output,
+            "error": run.error,
+            "vendor_job_id": run.vendor_job_id,
+        }
 
     @app.get("/processors/{processor_name}/runs")
     async def list_processor_runs(
@@ -839,6 +980,7 @@ def build_api() -> FastAPI:
         x_vendor_signature: Optional[str] = Header(default=None, alias="X-Vendor-Signature"),
         x_vendor_event_id: Optional[str] = Header(default=None, alias="X-Vendor-Event-ID"),
         x_vendor_timestamp: Optional[str] = Header(default=None, alias="X-Vendor-Timestamp"),
+        db: AsyncSession = Depends(get_session),
     ) -> Response:
         """Receive webhook notifications from vendor service."""
         # Validate content type
@@ -920,8 +1062,11 @@ def build_api() -> FastAPI:
             return Response(status_code=204)
 
         # Find the run associated with this vendor job
-        run_id = run_store.find_run_by_vendor_job(vendor_job_id)
-        if not run_id:
+        stmt = select(Run).where(Run.vendor_job_id == vendor_job_id)
+        result = await db.execute(stmt)
+        run = result.scalar_one_or_none()
+        
+        if not run:
             # Unknown job, but not an error - return 204
             logger.info(
                 "Webhook for unknown job",
@@ -934,18 +1079,16 @@ def build_api() -> FastAPI:
         output = payload.get("output")
         error = payload.get("error")
 
-        run_store.complete_run(
-            run_id,
-            status=webhook_status,
-            output=output,
-            error=error,
-        )
+        run.status = webhook_status
+        run.output = output
+        run.error = error
+        await db.commit()
 
         logger.info(
             "Webhook processed",
             extra={
                 "context": {
-                    "run_id": run_id,
+                    "run_id": run.id,
                     "vendor_job_id": vendor_job_id,
                     "status": webhook_status,
                     "event_id": x_vendor_event_id,
