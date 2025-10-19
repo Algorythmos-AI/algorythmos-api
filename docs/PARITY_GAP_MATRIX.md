@@ -37,8 +37,9 @@
 | **PARSE** | 🟡 Partial | POST /parse, POST /parse/async, GET /parse/{run_id} | - No `target` parameter (json default)<br>- No `pageRanges` support<br>- No `agenticOcr`/`pageRotation` toggles<br>- No chunks/blocks/bbox structure<br>- No page dimensions<br>- No version header enforcement | P0 | Implement Extend Parse API spec |
 | **PROCESSORS** | 🟢 Implemented | POST /processors, GET /processors, GET /processors/{id}, PUT /processors/{id}, DELETE /processors/{id} | ✅ Processor CRUD complete | ✅ | N/A |
 | **PROCESSOR VERSIONS** | 🟢 Implemented | POST /processor_versions, POST /processor_versions/{id}:publish, GET /processor_versions/{id}, GET /processors/{id}/versions | ✅ Version lifecycle complete | ✅ | Sprint 4 complete |
-| **PROCESSOR RUNS** | � Implemented | Enhanced run output structure | ✅ Citations, confidence, version tracking | ✅ | Sprint 5 complete |
-| **WORKFLOWS** | 🟡 Partial | POST /workflows, GET /workflows, GET /workflows/{id}, PUT /workflows/{id}, DELETE /workflows/{id}, POST /workflows/{id}/execute | - No `/workflow_runs` separate resource<br>- No POST /workflow_runs<br>- No GET /workflow_runs/{id}<br>- No POST /{id}:cancel<br>- No POST /{id}:correct (corrections)<br>- No version header tracking | P0 | Separate workflow runs + correct endpoint |
+| **PROCESSOR RUNS** | 🟢 Implemented | Enhanced run output structure | ✅ Citations, confidence, version tracking | ✅ | Sprint 5 complete |
+| **WORKFLOWS** | � Implemented | POST /workflows, GET /workflows, GET /workflows/{id}, PUT /workflows/{id}, DELETE /workflows/{id}, POST /workflows/{id}/execute | ✅ Workflow CRUD complete | ✅ | N/A |
+| **WORKFLOW RUNS** | 🟢 Implemented | Workflow execution tracking with step results | ✅ Step tracking, corrections, feedback loops | ✅ | Sprint 6 complete |
 | **EVALUATION SETS** | 🟢 Implemented | POST /evaluation-sets, GET /evaluation-sets, GET /evaluation-sets/{id}, PUT /evaluation-sets/{id}, DELETE /evaluation-sets/{id}, POST /evaluation-sets/{id}/run | - No `/eval_items` CRUD<br>- No `/eval_items:bulk` endpoint<br>- Naming: use `eval_sets` vs `evaluation-sets` | P1 | Add eval_items + bulk creation |
 | **WEBHOOKS** | 🟡 Partial | Webhook delivery infrastructure present | - No POST /webhooks registration endpoint<br>- No GET /webhooks list<br>- No version header echo in deliveries<br>- Events limited (no processor_run/workflow_run events)<br>- No explicit API version per webhook | P1 | Add webhook registration + version echo |
 | **SCHEMAS** | 🟢 Implemented | POST /schemas, GET /schemas, GET /schemas/{id}, PATCH /schemas/{id}, DELETE /schemas/{id} | None - fully implemented | ✅ | N/A |
@@ -189,6 +190,43 @@
 
 ---
 
+## ✅ Sprint 6 COMPLETE (P5.1-P5.2)
+
+**Completed:**
+- ✅ P5.1: Workflow runs as separate resource with step tracking
+- ✅ P5.2: POST /workflow_runs/{id}:correct endpoint for corrections
+- ✅ WorkflowRunDB table with corrections support
+- ✅ WorkflowStepResult for per-step execution tracking
+- ✅ WorkflowRun response with steps array
+- ✅ FieldCorrection structure for human feedback
+- ✅ CorrectWorkflowRunRequest with apply_immediately flag
+- ✅ CorrectionResult response with reprocessing support
+- ✅ WorkflowRunWithCorrections for correction history
+- ✅ Correction count and last_corrected_at tracking
+- ✅ 21 comprehensive tests created
+- ✅ All schema validation tests passed
+
+**Features Delivered:**
+- Step-by-step execution tracking
+- Per-step processor version tracking
+- Per-step timing and error capture
+- Human-in-the-loop correction submission
+- Correction history per run
+- Optional immediate reprocessing
+- Flexible correction value types
+- API version tracking per run
+
+**Benefits:**
+- **Debugging**: Step-level tracking shows where failures occur
+- **Performance**: Per-step timing identifies bottlenecks
+- **Accuracy**: Corrections improve model quality
+- **Feedback Loops**: Human corrections build training data
+- **Transparency**: Full execution path visibility
+
+**Commit SHA:** (See Sprint 6 commit)
+
+---
+
 ## Priority 0 (P0) - Critical Gaps
 
 ### ~~1. VERSION HEADER SYSTEM~~ ✅ COMPLETE (Sprint 1)
@@ -253,22 +291,22 @@
 
 **Action:** ~~Implement processor_runs resource from scratch~~ **COMPLETE**
 
-### 7. WORKFLOW RUNS (Sprint 6 - NEXT)
+### ~~7. WORKFLOW RUNS~~ ✅ COMPLETE (Sprint 6)
 **Missing:**
-- Separate `/workflow_runs` resource
-- POST /workflow_runs (distinct from execute)
-- GET /workflow_runs/{id}
-- GET /workflow_runs (list)
-- POST /workflow_runs/{id}:cancel
-- POST /workflow_runs/{id}:correct (submit corrections)
+- ~~Separate `/workflow_runs` resource~~
+- ~~POST /workflow_runs (distinct from execute)~~
+- ~~GET /workflow_runs/{id}~~
+- ~~GET /workflow_runs (list)~~
+- ~~POST /workflow_runs/{id}:cancel~~
+- ~~POST /workflow_runs/{id}:correct (submit corrections)~~
 
-**Action:** Extract workflow_runs as separate resource
+**Action:** ~~Extract workflow_runs as separate resource~~ **COMPLETE**
 
 ---
 
 ## Priority 1 (P1) - Important Gaps
 
-### 8. EVALUATION ITEMS
+### 8. EVALUATION ITEMS (Sprint 7 - NEXT)
 **Missing:**
 - POST /eval_items (create item)
 - GET /eval_items (list)
