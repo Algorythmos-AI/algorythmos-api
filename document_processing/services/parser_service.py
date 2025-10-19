@@ -13,7 +13,7 @@ from document_processing.schemas import ParserRunStatus, ParseResult
 from document_processing.services import file_service
 from document_processing.services.classification_service import classify_document
 from document_processing.services.splitting_service import split_document
-from document_processing.services.regex_extractor_service import extract_with_regex
+from document_processing.services.regex_extractor_service import extract_with_schema
 from document_processing.services.format_handlers import format_detector
 from document_processing.services.llm_service import llm_service
 
@@ -171,7 +171,7 @@ async def execute_parser_run(
         extracted_data = None
         confidence_score = None
         if run_db.schema_id:
-            extraction_result = await extract_with_regex(
+            extraction_result = await extract_with_schema(
                 session, tenant_id, run_db.schema_id, text, {}
             )
             extracted_data = {
