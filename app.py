@@ -79,6 +79,12 @@ class JobRecord(BaseModel):
     duration_sec: Optional[float] = None
 
 
+# Rebuild models to ensure all forward references are resolved
+PathRequest.model_rebuild()
+JobCreate.model_rebuild()
+JobRecord.model_rebuild()
+
+
 class RequestContextMiddleware(BaseHTTPMiddleware):
     """Add request ID to all requests."""
     
@@ -544,7 +550,7 @@ def build_api() -> FastAPI:
                 "error": str(e)
             }
     
-        # Add middleware in correct order (LIFO)
+    # Add middleware in correct order (LIFO)
     origins = settings.get_cors_origins()
     app.add_middleware(
         CORSMiddleware,
