@@ -5,7 +5,7 @@ from datetime import datetime
 from sqlalchemy import Boolean, Column, DateTime, Float, Integer, JSON, String, Text
 from sqlalchemy.sql import func
 
-from app.models import Base
+from app.database import Base
 
 
 class ExtractionSchemaDB(Base):
