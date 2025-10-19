@@ -23,6 +23,8 @@ from config import settings
 from pdf_usage_extractor import ExtractionRouter
 from pdf_usage_extractor.logging_utils import get_logger
 from pdf_usage_extractor.schemas import ExtractResponse, UsageRecord, ProcessorCreateRunRequest, ProcessorUpdateRequest, ProcessorInfo
+from vendor_libs.services import vendor
+from vendor_libs.utils.runstore import run_store
 
 
 class PathRequest(BaseModel):
@@ -623,10 +625,11 @@ def build_api() -> FastAPI:
     async def create_processor_run(
         processor_name: str,
         request: Request,
-        payload: JobCreate,
         background_tasks: BackgroundTasks,
+        files: List[UploadFile] = File(...),
         tenant_ctx: Dict[str, str] = Depends(require_key),
         x_api_version: Optional[str] = Header(default=None),
+        idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
     ) -> Dict[str, Any]:
         """Create a processor run (Algorythmos-style endpoint)."""
         # Log API version if provided
@@ -636,19 +639,126 @@ def build_api() -> FastAPI:
                 extra={"context": {"version": x_api_version, "processor": processor_name}},
             )
 
-        run_id = str(uuid4())
-        job_record = JobRecord(
-            job_id=run_id,
-            status="queued",
-            tenant_id=tenant_ctx["tenant"],
-            request_id=getattr(request.state, "request_id", None),
-            created_at=_utcnow(),
-            updated_at=_utcnow(),
-            webhook_url=payload.webhook_url,
-        )
-        _jobs[run_id] = job_record
+        # Check idempotency key - return existing run if found
+        if idempotency_key:
+            existing = run_store.get_run(idempotency_key)
+            if existing:
+                logger.info(
+                    "Idempotent run reused",
+                    extra={"context": {"idempotency_key": idempotency_key, "run_id": existing["id"]}},
+                )
+                return existing
 
-        background_tasks.add_task(_execute_job, run_id, payload, tenant_ctx["tenant"], job_record.request_id)
+        # Validate file count
+        if len(files) > RUN_MAX_FILES:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "code": "TOO_MANY_FILES",
+                    "message": f"Too many files: {len(files)} exceeds limit of {RUN_MAX_FILES}",
+                }
+            )
+
+        # Validate each file
+        file_data = []
+        for upload in files:
+            # Check content type
+            if upload.content_type not in {"application/pdf", "application/x-pdf", None}:
+                raise HTTPException(
+                    status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+                    detail={
+                        "code": "UNSUPPORTED_MEDIA_TYPE",
+                        "message": f"Unsupported content type: {upload.content_type}",
+                    }
+                )
+            
+            # Read content and validate size
+            content = await upload.read()
+            if len(content) > RUN_MAX_FILE_BYTES:
+                raise HTTPException(
+                    status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                    detail={
+                        "code": "FILE_TOO_LARGE",
+                        "message": f"File exceeds {RUN_MAX_FILE_BYTES} bytes limit",
+                    }
+                )
+            
+            # Validate PDF magic bytes
+            if not content.startswith(b"%PDF-"):
+                raise HTTPException(
+                    status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+                    detail={
+                        "code": "INVALID_PDF",
+                        "message": f"File is not a valid PDF: {upload.filename}",
+                    }
+                )
+            
+            # Create in-memory file for vendor upload
+            file_data.append({
+                "filename": upload.filename or "upload.pdf",
+                "content": content,
+                "content_type": upload.content_type or "application/pdf",
+            })
+
+        # Upload files to vendor service
+        try:
+            # Recreate UploadFile objects from validated data
+            upload_files = []
+            for fd in file_data:
+                import io
+                from starlette.datastructures import UploadFile as StarletteUpload, Headers
+                fake_file = io.BytesIO(fd["content"])
+                headers = Headers({"content-type": fd["content_type"]})
+                upload_files.append(
+                    StarletteUpload(
+                        file=fake_file,
+                        filename=fd["filename"],
+                        headers=headers,
+                    )
+                )
+            
+            upload_result = await vendor.upload_files_stream(upload_files)
+            input_path = upload_result.get("input_path", "mock://upload")
+        except Exception as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail={
+                    "code": "VENDOR_UPLOAD_FAILED",
+                    "message": f"Failed to upload files: {str(exc)}",
+                }
+            ) from exc
+
+        # Create vendor job
+        run_id = idempotency_key or str(uuid4())
+        try:
+            job_payload = {"processor_name": processor_name}
+            vendor_job = await vendor.create_job(input_path, job_payload, tenant_id=tenant_ctx["tenant"])
+            vendor_job_id = vendor_job.get("job_id")
+        except Exception as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail={
+                    "code": "VENDOR_JOB_FAILED",
+                    "message": f"Failed to create vendor job: {str(exc)}",
+                }
+            ) from exc
+
+        # Store run metadata
+        run_record = {
+            "id": run_id,
+            "processor_name": processor_name,
+            "status": "queued",
+            "created_at": _utcnow().isoformat(),
+            "updated_at": _utcnow().isoformat(),
+            "tenant_id": tenant_ctx["tenant"],
+            "file_count": len(file_data),
+            "vendor_job_id": vendor_job_id,
+        }
+        run_store.put_run(run_id, run_record)
+        
+        # Link vendor job to run
+        if vendor_job_id:
+            run_store.link_vendor_job(vendor_job_id, run_id)
 
         logger.info(
             "Processor run queued",
@@ -657,20 +767,15 @@ def build_api() -> FastAPI:
                     "run_id": run_id,
                     "processor": processor_name,
                     "tenant_id": tenant_ctx["tenant"],
-                    "request_id": job_record.request_id,
+                    "request_id": getattr(request.state, "request_id", None),
                     "api_version": x_api_version,
+                    "file_count": len(file_data),
+                    "vendor_job_id": vendor_job_id,
                 }
             },
         )
         
-        # Return Algorythmos-compatible response
-        return {
-            "run_id": run_id,
-            "processor_name": processor_name,
-            "status": job_record.status,
-            "created_at": job_record.created_at.isoformat(),
-            "tenant_id": tenant_ctx["tenant"],
-        }
+        return run_record
 
     @app.get("/processors/{processor_name}/runs/{run_id}")
     async def get_processor_run(
@@ -680,31 +785,32 @@ def build_api() -> FastAPI:
         x_api_version: Optional[str] = Header(default=None),
     ) -> Dict[str, Any]:
         """Get processor run status and results (Algorythmos-style endpoint)."""
-        job = _jobs.get(run_id)
-        if not job or job.tenant_id != tenant_ctx["tenant"]:
+        run = run_store.get_run(run_id)
+        if not run or run.get("tenant_id") != tenant_ctx["tenant"]:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, 
                 detail={"code": "RUN_NOT_FOUND", "message": "Run not found"}
             )
         
-        # Return Algorythmos-compatible response format
-        response = {
-            "run_id": run_id,
-            "processor_name": processor_name,
-            "status": job.status,
-            "created_at": job.created_at.isoformat(),
-            "updated_at": job.updated_at.isoformat(),
-            "tenant_id": job.tenant_id,
+        return run
+
+    @app.get("/processors/{processor_name}/runs")
+    async def list_processor_runs(
+        processor_name: str,
+        tenant_ctx: Dict[str, str] = Depends(require_key),
+        limit: int = Query(default=20, ge=1, le=100),
+        offset: int = Query(default=0, ge=0),
+        x_api_version: Optional[str] = Header(default=None),
+    ) -> Dict[str, Any]:
+        """List processor runs with pagination (Algorythmos-style endpoint)."""
+        # For now, return empty list - will be implemented with database
+        # This is a placeholder to satisfy the API contract
+        return {
+            "items": [],
+            "total": 0,
+            "limit": limit,
+            "offset": offset,
         }
-        
-        if job.result:
-            response["output"] = job.result.model_dump(mode="json")
-        if job.error:
-            response["error"] = job.error
-        if job.duration_sec:
-            response["duration_sec"] = job.duration_sec
-            
-        return response
 
     @app.patch("/processors/{processor_name}")
     async def update_processor(
