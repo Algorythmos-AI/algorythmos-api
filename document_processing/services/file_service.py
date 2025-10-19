@@ -7,12 +7,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
-from fastapi import UploadFile
+from fastapi import UploadFile, HTTPException, status
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from document_processing.models import FileDB
 from document_processing.schemas import FileUpload
+from document_processing.services.format_validator import format_validator, FormatValidationError
 
 
 # Storage configuration
@@ -66,10 +67,30 @@ async def upload_file(
         
     Returns:
         FileUpload with file information
+        
+    Raises:
+        HTTPException: If file format is unsupported or invalid
     """
     # Read file content
     content = await file.read()
     size_bytes = len(content)
+    
+    # Validate and normalize format (Sprint 2 - P1.1)
+    try:
+        normalized_type, mime_type, format_metadata = format_validator.validate_and_normalize(
+            content=content,
+            filename=file.filename or "unknown",
+            declared_content_type=file.content_type
+        )
+    except FormatValidationError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "UNSUPPORTED_FORMAT",
+                "message": str(e),
+                "supported_formats": format_validator.get_supported_formats()
+            }
+        )
     
     # Calculate checksum
     checksum = await _calculate_checksum(content)
@@ -80,16 +101,23 @@ async def upload_file(
     # Save to disk
     storage_path = await _save_file_to_disk(file_id, content, file.filename or "unknown")
     
-    # Create database record
+    # Merge format metadata with user metadata
+    combined_metadata = {
+        **(metadata or {}),
+        "format_info": format_metadata,
+        "normalized_type": normalized_type
+    }
+    
+    # Create database record with normalized MIME type
     file_db = FileDB(
         id=file_id,
         tenant_id=tenant_id,
         filename=file.filename or "unknown",
-        content_type=file.content_type or "application/octet-stream",
+        content_type=mime_type,  # Use normalized MIME type
         size_bytes=size_bytes,
         storage_path=storage_path,
         checksum=checksum,
-        file_metadata=metadata or {},
+        file_metadata=combined_metadata,
         is_deleted=False,
         created_at=datetime.utcnow(),
         updated_at=datetime.utcnow()
