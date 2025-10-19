@@ -98,6 +98,30 @@
 
 ---
 
+## ✅ Sprint 3 COMPLETE (P2.1)
+
+**Completed:**
+- ✅ P2.1: Parse API enhanced with Extend-compatible structure
+- ✅ Blocks structure (TextBlock, TableBlock, FigureBlock) with bounding boxes
+- ✅ Chunks with full provenance (page, block_index, char positions)
+- ✅ Page dimensions extraction (width, height in points)
+- ✅ Detailed timing metrics (format, extraction, chunking)
+- ✅ pageRanges parameter parsing ("1-5,7,9-12")
+- ✅ agenticOcr and pageRotation parameters (placeholders)
+- ✅ Table detection with heuristics
+- ✅ 13 comprehensive parse tests created
+
+**Features Delivered:**
+- Content blocks with x,y coordinates and confidence
+- Text chunking with configurable size/overlap
+- Page dimension extraction from PDF metadata
+- Timing breakdown by operation phase
+- Page filtering before processing
+
+**Commit SHA:** (See Sprint 3 commit)
+
+---
+
 ## Priority 0 (P0) - Critical Gaps
 
 ### ~~1. VERSION HEADER SYSTEM~~ ✅ COMPLETE (Sprint 1)
@@ -128,19 +152,19 @@
 
 **Action:** ~~Implement comprehensive file intake per Extend spec~~ **COMPLETE**
 
-### 4. PARSE API PARITY (Sprint 3 - NEXT)
+### ~~4. PARSE API PARITY~~ ✅ COMPLETE (Sprint 3)
 **Missing:**
-- `target` parameter (default "json")
-- `pageRanges` support
-- `agenticOcr` and `pageRotation` toggles
-- Output structure: chunks, blocks (text/table/figure)
-- Bounding boxes (bbox)
-- Page dimensions
-- Timing metrics
+- ~~`target` parameter (default "json")~~
+- ~~`pageRanges` support~~
+- ~~`agenticOcr` and `pageRotation` toggles~~
+- ~~Output structure: chunks, blocks (text/table/figure)~~
+- ~~Bounding boxes (bbox)~~
+- ~~Page dimensions~~
+- ~~Timing metrics~~
 
-**Action:** Reimplement parse endpoint to match Extend schema
+**Action:** ~~Reimplement parse endpoint to match Extend schema~~ **COMPLETE**
 
-### 5. PROCESSOR VERSIONS
+### 5. PROCESSOR VERSIONS (Sprint 4 - NEXT)
 **Missing:**
 - POST /processor_versions (create version)
 - POST /processor_versions/{id}:publish (publish version)
