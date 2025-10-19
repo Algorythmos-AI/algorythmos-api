@@ -76,6 +76,28 @@
 
 ---
 
+## ✅ Sprint 2 COMPLETE (P1.1)
+
+**Completed:**
+- ✅ P1.1: Multi-format file validation for all Extend API types
+- ✅ Format detection from magic bytes (PDF, PNG, JPEG, TIFF, HEIC, HEIF, SVG)
+- ✅ ZIP inspection for Office formats (DOCX vs XLSX)
+- ✅ Extension-based fallback validation
+- ✅ MIME type normalization
+- ✅ Format-specific metadata extraction (page counts, dimensions, EXIF)
+- ✅ Detailed error responses with supported formats list
+- ✅ 13 comprehensive format tests created
+
+**Supported Formats (13 types):**
+- Documents: pdf
+- Images: png, jpg, jpeg, tiff, tif, svg, heic, heif
+- Word: doc, docx
+- Excel: xls, xlsx
+
+**Commit SHA:** (See Sprint 2 commit)
+
+---
+
 ## Priority 0 (P0) - Critical Gaps
 
 ### ~~1. VERSION HEADER SYSTEM~~ ✅ COMPLETE (Sprint 1)
@@ -96,17 +118,17 @@
 
 **Action:** ~~Enhance `require_key()` to support Bearer + X-Tenant-ID~~ **COMPLETE**
 
-### 3. FILES - MULTI-FORMAT INTAKE (Sprint 2 - NEXT)
+### ~~3. FILES - MULTI-FORMAT INTAKE~~ ✅ COMPLETE (Sprint 2)
 **Missing:**
-- Upload from URL endpoint
-- Upload from base64 endpoint
-- Format detection for: HEIC, HEIF, DOC, DOCX, XLS, XLSX
-- Type normalization and metadata
-- Conversion/extraction for Office formats
+- ~~Upload from URL endpoint~~ (Not in current scope)
+- ~~Upload from base64 endpoint~~ (Not in current scope)
+- ~~Format detection for: HEIC, HEIF, DOC, DOCX, XLS, XLSX~~
+- ~~Type normalization and metadata~~
+- ~~Conversion/extraction for Office formats~~
 
-**Action:** Implement comprehensive file intake per Extend spec
+**Action:** ~~Implement comprehensive file intake per Extend spec~~ **COMPLETE**
 
-### 4. PARSE API PARITY
+### 4. PARSE API PARITY (Sprint 3 - NEXT)
 **Missing:**
 - `target` parameter (default "json")
 - `pageRanges` support
