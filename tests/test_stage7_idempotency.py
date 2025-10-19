@@ -1,11 +1,18 @@
 import asyncio
 import pytest
+from httpx import Response
+from tests.conftest import TEST_VENDOR_BASE
 
 
-pytestmark = pytest.mark.asyncio
+pytestmark = pytest.mark.anyio
 
 
-async def test_idempotency_same_key_same_run_id(app_client, auth_headers):
+async def test_idempotency_same_key_same_run_id(app_client, auth_headers, fake_vendor):
+    # Mock vendor job creation
+    fake_vendor.post(f"{TEST_VENDOR_BASE}/jobs").mock(
+        return_value=Response(200, json={"job_id": "vendor-job-123", "status": "queued"})
+    )
+    
     headers = {**auth_headers, "Idempotency-Key": "stage7-same"}
     payload = {"input_path": "tests/data/sample.pdf"}
 
@@ -17,7 +24,12 @@ async def test_idempotency_same_key_same_run_id(app_client, auth_headers):
     assert resp1.json()["id"] == resp2.json()["id"]
 
 
-async def test_idempotency_race_two_requests_same_key(app_client, auth_headers):
+async def test_idempotency_race_two_requests_same_key(app_client, auth_headers, fake_vendor):
+    # Mock vendor job creation
+    fake_vendor.post(f"{TEST_VENDOR_BASE}/jobs").mock(
+        return_value=Response(200, json={"job_id": "vendor-job-456", "status": "queued"})
+    )
+    
     headers = {**auth_headers, "Idempotency-Key": "stage7-race"}
     payload = {"input_path": "tests/data/sample.pdf"}
 
