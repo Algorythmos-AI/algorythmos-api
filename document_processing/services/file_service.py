@@ -17,8 +17,20 @@ from document_processing.services.format_validator import format_validator, Form
 
 
 # Storage configuration
-UPLOAD_DIR = Path("files")
-UPLOAD_DIR.mkdir(exist_ok=True)
+# Use /tmp in serverless environments (Vercel, Lambda), otherwise local 'files' dir
+def _get_upload_dir() -> Path:
+    """Get upload directory, using /tmp in serverless environments."""
+    if os.getenv("VERCEL") or os.getenv("AWS_LAMBDA_FUNCTION_NAME"):
+        return Path("/tmp/files")
+    return Path("files")
+
+
+UPLOAD_DIR = _get_upload_dir()
+
+
+def _ensure_upload_dir() -> None:
+    """Lazily create upload directory when needed (avoid read-only fs errors at import time)."""
+    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 
 async def _calculate_checksum(content: bytes) -> str:
@@ -33,9 +45,12 @@ async def _save_file_to_disk(file_id: str, content: bytes, filename: str) -> str
     Returns:
         Storage path relative to UPLOAD_DIR
     """
+    # Ensure upload directory exists (lazy creation for serverless compatibility)
+    _ensure_upload_dir()
+    
     # Create subdirectory based on first 2 chars of file_id for better distribution
     subdir = UPLOAD_DIR / file_id[:2]
-    subdir.mkdir(exist_ok=True)
+    subdir.mkdir(parents=True, exist_ok=True)
     
     # Store with file_id as name, preserving extension
     ext = Path(filename).suffix
