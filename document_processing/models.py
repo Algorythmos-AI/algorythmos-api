@@ -126,3 +126,58 @@ class ExtractionResultDB(Base):
     
     def __repr__(self) -> str:
         return f"<ExtractionResult(id={self.id}, document_id={self.document_id})>"
+
+
+class FileDB(Base):
+    """Database model for uploaded files."""
+    
+    __tablename__ = "files"
+    
+    id = Column(String, primary_key=True)
+    tenant_id = Column(String, nullable=False, index=True)
+    filename = Column(String(255), nullable=False)
+    content_type = Column(String(100), nullable=False)
+    size_bytes = Column(Integer, nullable=False)
+    storage_path = Column(String, nullable=False)  # Path to file in storage
+    checksum = Column(String(64), nullable=False)  # SHA-256 checksum
+    file_metadata = Column(JSON, nullable=True)  # Additional metadata
+    is_deleted = Column(Boolean, nullable=False, default=False, index=True)
+    created_at = Column(DateTime, nullable=False, default=func.now())
+    updated_at = Column(DateTime, nullable=False, default=func.now(), onupdate=func.now())
+    
+    def __repr__(self) -> str:
+        return f"<File(id={self.id}, filename={self.filename})>"
+
+
+class ParserRunDB(Base):
+    """Database model for parser execution runs."""
+    
+    __tablename__ = "parser_runs"
+    
+    id = Column(String, primary_key=True)
+    tenant_id = Column(String, nullable=False, index=True)
+    file_id = Column(String, nullable=False, index=True)
+    status = Column(String(20), nullable=False, index=True)  # pending, running, completed, failed
+    schema_id = Column(String, nullable=True)  # Optional: which schema to use
+    extractor_id = Column(String, nullable=True)  # Optional: which extractor to use
+    classifier_id = Column(String, nullable=True)  # Optional: classifier used
+    splitter_id = Column(String, nullable=True)  # Optional: splitter used
+    
+    # Results
+    classification_result = Column(JSON, nullable=True)  # Classification output
+    split_chunks = Column(JSON, nullable=True)  # List of chunk metadata
+    extracted_data = Column(JSON, nullable=True)  # Extracted fields
+    confidence_score = Column(Integer, nullable=True)  # Overall confidence (0-100)
+    
+    # Execution metadata
+    started_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+    processing_time_ms = Column(Integer, nullable=True)
+    error_message = Column(Text, nullable=True)
+    run_metadata = Column(JSON, nullable=True)  # Additional run information
+    
+    created_at = Column(DateTime, nullable=False, default=func.now())
+    updated_at = Column(DateTime, nullable=False, default=func.now(), onupdate=func.now())
+    
+    def __repr__(self) -> str:
+        return f"<ParserRun(id={self.id}, file_id={self.file_id}, status={self.status})>"
