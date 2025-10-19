@@ -3,7 +3,7 @@
 ## Execution Status
 
 **Started:** 2025-10-19
-**Current Phase:** PHASE 4 - Advanced Parsing  
+**Current Phase:** PHASE 5 - Multi-Format & LLM  
 **Overall Status:** IN_PROGRESS
 
 ---
@@ -141,18 +141,52 @@
 
 ---
 
-## PHASE 4: Advanced Parsing 📄
+## PHASE 4: Advanced Parsing ✓
 
-**Status:** NOT_STARTED
+**Status:** COMPLETE
 
-### Checklist
-- [ ] Create files table and model
-- [ ] Implement file upload endpoint
-- [ ] Create parser_runs table
-- [ ] Implement sync parse endpoint
-- [ ] Implement async parse endpoint
-- [ ] Add tests
-- [ ] Verify with curl
+### Completed ✓
+- [x] Created `files` and `parser_runs` database models
+- [x] Created `file_service.py` (234 lines)
+- [x] Created `parser_service.py` (357 lines)
+- [x] Created Alembic migration `20250119_files_parser_runs`
+- [x] Applied migration successfully
+- [x] Added 8 new endpoints for files and parser runs
+- [x] Added comprehensive tests (test_phase4_files_parsing.py)
+- [x] Verified endpoint functionality
+
+### Implementation Details
+- **File Service:**
+  - File upload with storage management in files/ directory
+  - SHA-256 checksum calculation
+  - Subdirectory distribution for performance (first 2 chars of file_id)
+  - CRUD operations with soft-delete
+  - Pagination support
+  
+- **Parser Service:**
+  - Orchestrates document parsing pipeline
+  - Integrates classification, splitting, and extraction services
+  - Synchronous execution with immediate results
+  - Async run creation (stub for background workers)
+  - Status tracking: pending, running, completed, failed
+  - Error handling and result aggregation
+  
+- **Endpoints:**
+  - POST /api/files: Upload file (201 Created)
+  - GET /api/files: List files with pagination
+  - GET /api/files/{file_id}: Get file metadata
+  - DELETE /api/files/{file_id}: Soft delete file
+  - POST /api/parse: Synchronous parse (200 OK)
+  - POST /api/parse/async: Async parse (202 Accepted)
+  - GET /api/parse/{run_id}: Get parser run status
+  - GET /api/parse: List parser runs with filtering
+
+### Notes
+- Parser orchestration currently supports text files
+- PDF text extraction is stubbed (placeholder for future implementation)
+- Async execution creates run record but doesn't execute (needs background worker)
+- File storage uses local filesystem (files/ directory)
+- Route count increased to 49
 
 ---
 
@@ -209,6 +243,7 @@
 | 1 | - | feat(phase1): schemas, extractors, classifiers, splitters with soft-delete + offset pagination | 2025-10-19 |
 | 2 | - | feat(phase2): regex-based field extraction with citations and confidence | 2025-10-19 |
 | 3 | - | feat(phase3): keyword classification and rule-based document splitting | 2025-10-19 |
+| 4 | - | feat(phase4): file uploads and parser runs with orchestrated parsing | 2025-01-19 |
 
 ---
 
