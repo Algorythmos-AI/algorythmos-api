@@ -93,6 +93,13 @@ _rate_bucket: Dict[tuple[str, int], int] = {}
 _rate_lock = Lock()
 _jobs: Dict[str, JobRecord] = {}
 
+# Stage 3+ constants - exposed for tests
+RUN_MAX_FILE_BYTES = settings.RUN_MAX_FILE_BYTES
+RUN_MAX_FILES = settings.RUN_MAX_FILES
+WEBHOOK_REPLAY_TTL_S = settings.WEBHOOK_REPLAY_TTL_S
+WEBHOOK_REPLAY_WINDOW_S = settings.WEBHOOK_REPLAY_WINDOW_S
+_processor_runs: Dict[str, JobRecord] = {}  # For Algorythmos-style runs
+
 
 def _utcnow() -> datetime:
     """Get current UTC timestamp."""

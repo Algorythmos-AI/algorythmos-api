@@ -55,6 +55,47 @@ class Settings(BaseSettings):
         description="Maximum file size in MB"
     )
     
+    # Stage 3+ Requirements: Runs and processing limits
+    RUN_MAX_FILE_BYTES: int = Field(
+        default=10 * 1024 * 1024,  # 10MB default
+        description="Maximum file size in bytes for run uploads"
+    )
+    RUN_MAX_FILES: int = Field(
+        default=50,
+        description="Maximum number of files per run"
+    )
+    
+    # Webhook and security settings
+    WEBHOOK_REPLAY_TTL_S: int = Field(
+        default=300,  # 5 minutes
+        description="Time-to-live for webhook replay protection in seconds"
+    )
+    WEBHOOK_REPLAY_WINDOW_S: int = Field(
+        default=60,  # 1 minute
+        description="Time window for webhook timestamp validation in seconds"
+    )
+    WEBHOOK_SECRET: str = Field(
+        default="test_secret_change_in_production",
+        validation_alias=AliasChoices("WEBHOOK_SECRET", "webhook_secret"),
+        description="Secret for webhook HMAC signature verification"
+    )
+    
+    # Idempotency settings
+    IDEMPOTENCY_TTL_S: int = Field(
+        default=86400,  # 24 hours
+        description="Time-to-live for idempotency key cache in seconds"
+    )
+    
+    # Vendor retry configuration
+    VENDOR_RETRY_MAX_ATTEMPTS: int = Field(
+        default=3,
+        description="Maximum retry attempts for vendor API calls"
+    )
+    VENDOR_RETRY_BASE_DELAY_S: float = Field(
+        default=0.25,
+        description="Base delay in seconds for exponential backoff retries"
+    )
+    
     # Logging
     LOG_LEVEL: str = Field(
         default="INFO",
