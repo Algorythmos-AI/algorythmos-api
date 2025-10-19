@@ -36,7 +36,8 @@ async def create_extractor(
         select(ExtractionSchemaDB).where(
             and_(
                 ExtractionSchemaDB.id == request.schema_id,
-                ExtractionSchemaDB.tenant_id == tenant_id
+                ExtractionSchemaDB.tenant_id == tenant_id,
+                ExtractionSchemaDB.is_deleted == False
             )
         )
     )
@@ -49,7 +50,8 @@ async def create_extractor(
         select(ExtractorDB).where(
             and_(
                 ExtractorDB.tenant_id == tenant_id,
-                ExtractorDB.name == request.name
+                ExtractorDB.name == request.name,
+                ExtractorDB.is_deleted == False
             )
         )
     )
@@ -102,7 +104,8 @@ async def get_extractor(
         select(ExtractorDB).where(
             and_(
                 ExtractorDB.id == extractor_id,
-                ExtractorDB.tenant_id == tenant_id
+                ExtractorDB.tenant_id == tenant_id,
+                ExtractorDB.is_deleted == False
             )
         )
     )
@@ -118,25 +121,30 @@ async def list_extractors(
     db: AsyncSession,
     tenant_id: str,
     limit: int = 20,
-    cursor: Optional[str] = None,
+    offset: int = 0,
     schema_id: Optional[str] = None,
     enabled: Optional[bool] = None
-) -> Tuple[List[ExtractorConfig], int, Optional[str], bool]:
+) -> Tuple[List[ExtractorConfig], int]:
     """List extractors with pagination and filters.
     
     Args:
         db: Database session
         tenant_id: Tenant identifier
         limit: Maximum number of items to return
-        cursor: Pagination cursor (created_at timestamp)
+        offset: Number of items to skip
         schema_id: Filter by schema ID
         enabled: Filter by enabled status
     
     Returns:
-        Tuple of (extractors, total_count, next_cursor, has_more)
+        Tuple of (extractors, total_count)
     """
     # Build query
-    query = select(ExtractorDB).where(ExtractorDB.tenant_id == tenant_id)
+    query = select(ExtractorDB).where(
+        and_(
+            ExtractorDB.tenant_id == tenant_id,
+            ExtractorDB.is_deleted == False
+        )
+    )
     
     if schema_id:
         query = query.where(ExtractorDB.schema_id == schema_id)
@@ -144,28 +152,20 @@ async def list_extractors(
     if enabled is not None:
         query = query.where(ExtractorDB.enabled == enabled)
     
-    if cursor:
-        query = query.where(ExtractorDB.created_at < datetime.fromisoformat(cursor))
-    
-    # Order by created_at descending (newest first)
-    query = query.order_by(ExtractorDB.created_at.desc()).limit(limit + 1)
+    # Order by created_at descending (newest first) and apply pagination
+    query = query.order_by(ExtractorDB.created_at.desc()).offset(offset).limit(limit)
     
     # Execute query
     result = await db.execute(query)
     extractors = result.scalars().all()
     
-    # Check if there are more results
-    has_more = len(extractors) > limit
-    if has_more:
-        extractors = extractors[:limit]
-    
-    # Calculate next cursor
-    next_cursor = None
-    if has_more and extractors:
-        next_cursor = extractors[-1].created_at.isoformat()
-    
     # Get total count
-    count_query = select(ExtractorDB).where(ExtractorDB.tenant_id == tenant_id)
+    count_query = select(ExtractorDB).where(
+        and_(
+            ExtractorDB.tenant_id == tenant_id,
+            ExtractorDB.is_deleted == False
+        )
+    )
     if schema_id:
         count_query = count_query.where(ExtractorDB.schema_id == schema_id)
     if enabled is not None:
@@ -176,9 +176,7 @@ async def list_extractors(
     
     return (
         [_db_to_pydantic(e) for e in extractors],
-        total,
-        next_cursor,
-        has_more
+        total
     )
 
 
@@ -203,7 +201,8 @@ async def update_extractor(
         select(ExtractorDB).where(
             and_(
                 ExtractorDB.id == extractor_id,
-                ExtractorDB.tenant_id == tenant_id
+                ExtractorDB.tenant_id == tenant_id,
+                ExtractorDB.is_deleted == False
             )
         )
     )
@@ -211,6 +210,20 @@ async def update_extractor(
     
     if not db_extractor:
         return None
+    
+    # Check for duplicate name if name is being changed
+    if request.name is not None and request.name != db_extractor.name:
+        existing_result = await db.execute(
+            select(ExtractorDB).where(
+                and_(
+                    ExtractorDB.tenant_id == tenant_id,
+                    ExtractorDB.name == request.name,
+                    ExtractorDB.is_deleted == False
+                )
+            )
+        )
+        if existing_result.scalar_one_or_none():
+            raise ValueError(f"Extractor with name '{request.name}' already exists for this tenant")
     
     # Update fields
     if request.name is not None:
@@ -235,7 +248,7 @@ async def delete_extractor(
     tenant_id: str,
     extractor_id: str
 ) -> bool:
-    """Delete an extractor.
+    """Soft delete an extractor.
     
     Args:
         db: Database session
@@ -249,7 +262,8 @@ async def delete_extractor(
         select(ExtractorDB).where(
             and_(
                 ExtractorDB.id == extractor_id,
-                ExtractorDB.tenant_id == tenant_id
+                ExtractorDB.tenant_id == tenant_id,
+                ExtractorDB.is_deleted == False
             )
         )
     )
@@ -258,7 +272,10 @@ async def delete_extractor(
     if not db_extractor:
         return False
     
-    await db.delete(db_extractor)
+    # Soft delete: set is_deleted flag
+    db_extractor.is_deleted = True
+    db_extractor.updated_at = datetime.utcnow()
+    
     await db.commit()
     
     return True
