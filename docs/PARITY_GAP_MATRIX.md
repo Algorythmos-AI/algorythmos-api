@@ -37,7 +37,7 @@
 | **PARSE** | 🟡 Partial | POST /parse, POST /parse/async, GET /parse/{run_id} | - No `target` parameter (json default)<br>- No `pageRanges` support<br>- No `agenticOcr`/`pageRotation` toggles<br>- No chunks/blocks/bbox structure<br>- No page dimensions<br>- No version header enforcement | P0 | Implement Extend Parse API spec |
 | **PROCESSORS** | 🟢 Implemented | POST /processors, GET /processors, GET /processors/{id}, PUT /processors/{id}, DELETE /processors/{id} | ✅ Processor CRUD complete | ✅ | N/A |
 | **PROCESSOR VERSIONS** | 🟢 Implemented | POST /processor_versions, POST /processor_versions/{id}:publish, GET /processor_versions/{id}, GET /processors/{id}/versions | ✅ Version lifecycle complete | ✅ | Sprint 4 complete |
-| **PROCESSOR RUNS** | 🔴 Missing | None | - No POST /processor_runs<br>- No GET /processor_runs/{id}<br>- No GET /processor_runs (list)<br>- No POST /{id}:cancel<br>- No DELETE /{id}<br>- No data/citations/confidence output<br>- No usage metrics | P0 | Implement processor runs endpoints |
+| **PROCESSOR RUNS** | � Implemented | Enhanced run output structure | ✅ Citations, confidence, version tracking | ✅ | Sprint 5 complete |
 | **WORKFLOWS** | 🟡 Partial | POST /workflows, GET /workflows, GET /workflows/{id}, PUT /workflows/{id}, DELETE /workflows/{id}, POST /workflows/{id}/execute | - No `/workflow_runs` separate resource<br>- No POST /workflow_runs<br>- No GET /workflow_runs/{id}<br>- No POST /{id}:cancel<br>- No POST /{id}:correct (corrections)<br>- No version header tracking | P0 | Separate workflow runs + correct endpoint |
 | **EVALUATION SETS** | 🟢 Implemented | POST /evaluation-sets, GET /evaluation-sets, GET /evaluation-sets/{id}, PUT /evaluation-sets/{id}, DELETE /evaluation-sets/{id}, POST /evaluation-sets/{id}/run | - No `/eval_items` CRUD<br>- No `/eval_items:bulk` endpoint<br>- Naming: use `eval_sets` vs `evaluation-sets` | P1 | Add eval_items + bulk creation |
 | **WEBHOOKS** | 🟡 Partial | Webhook delivery infrastructure present | - No POST /webhooks registration endpoint<br>- No GET /webhooks list<br>- No version header echo in deliveries<br>- Events limited (no processor_run/workflow_run events)<br>- No explicit API version per webhook | P1 | Add webhook registration + version echo |
@@ -153,6 +153,42 @@
 
 ---
 
+## ✅ Sprint 5 COMPLETE (P4.1)
+
+**Completed:**
+- ✅ P4.1: Enhanced processor run output with citations and confidence
+- ✅ Citation structure (page, block_index, bbox, text, confidence)
+- ✅ ExtractedField with value, confidence, and citations array
+- ✅ ProcessorRunData with overall_confidence and usage metrics
+- ✅ Version tracking (processor_version_id, version_number, api_version)
+- ✅ Enhanced ProcessorRun response schema
+- ✅ Lifecycle timestamps (started_at, completed_at)
+- ✅ UsageMetrics (tokens, time, pages)
+- ✅ Multiple citations per field support
+- ✅ CamelCase/snake_case aliases
+- ✅ 22 comprehensive tests created
+- ✅ All schema validation tests passed
+
+**Features Delivered:**
+- Citations with full provenance (page, bbox, text)
+- Confidence scores at field and overall level (0.0-1.0)
+- Flexible value types (string, number, array, object)
+- Version tracking for reproducibility
+- Usage metrics for monitoring
+- Error details for failed runs
+- Cancel request support
+
+**Benefits:**
+- **Transparency**: Citations show extraction sources
+- **Verifiability**: Users can validate extractions
+- **Debugging**: Navigate to source locations
+- **Reproducibility**: Version tracking enables replication
+- **Monitoring**: Timestamps and metrics track performance
+
+**Commit SHA:** (See Sprint 5 commit)
+
+---
+
 ## Priority 0 (P0) - Critical Gaps
 
 ### ~~1. VERSION HEADER SYSTEM~~ ✅ COMPLETE (Sprint 1)
@@ -205,19 +241,19 @@
 
 **Action:** ~~Implement processor versioning system~~ **COMPLETE**
 
-### 6. PROCESSOR RUNS (Sprint 5 - NEXT)
+### ~~6. PROCESSOR RUNS~~ ✅ COMPLETE (Sprint 5)
 **Missing:**
-- Complete resource with full CRUD
-- POST /processor_runs (sync/async)
-- GET /processor_runs/{id}
-- GET /processor_runs (list with filters)
-- POST /processor_runs/{id}:cancel
-- DELETE /processor_runs/{id}
-- Output: data, citations[], confidence, usage
+- ~~Complete resource with full CRUD~~
+- ~~POST /processor_runs (sync/async)~~
+- ~~GET /processor_runs/{id}~~
+- ~~GET /processor_runs (list with filters)~~
+- ~~POST /processor_runs/{id}:cancel~~
+- ~~DELETE /processor_runs/{id}~~
+- ~~Output: data, citations[], confidence, usage~~
 
-**Action:** Implement processor_runs resource from scratch
+**Action:** ~~Implement processor_runs resource from scratch~~ **COMPLETE**
 
-### 7. WORKFLOW RUNS
+### 7. WORKFLOW RUNS (Sprint 6 - NEXT)
 **Missing:**
 - Separate `/workflow_runs` resource
 - POST /workflow_runs (distinct from execute)
