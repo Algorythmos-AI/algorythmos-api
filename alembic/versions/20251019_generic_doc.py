@@ -28,7 +28,7 @@ def upgrade() -> None:
         sa.Column('description', sa.String(length=500), nullable=False),
         sa.Column('fields', sa.JSON(), nullable=False),
         sa.Column('version', sa.Integer(), nullable=False, server_default='1'),
-        sa.Column('metadata', sa.JSON(), nullable=True),
+        sa.Column('schema_metadata', sa.JSON(), nullable=True),
         sa.Column('created_at', sa.DateTime(), nullable=False, server_default=sa.text('CURRENT_TIMESTAMP')),
         sa.Column('updated_at', sa.DateTime(), nullable=False, server_default=sa.text('CURRENT_TIMESTAMP')),
         sa.PrimaryKeyConstraint('id')
@@ -95,7 +95,7 @@ def upgrade() -> None:
         sa.Column('content_type', sa.String(length=100), nullable=False, server_default='application/pdf'),
         sa.Column('content_size', sa.Integer(), nullable=False),
         sa.Column('storage_path', sa.String(), nullable=True),
-        sa.Column('metadata', sa.JSON(), nullable=True),
+        sa.Column('chunk_metadata', sa.JSON(), nullable=True),
         sa.Column('created_at', sa.DateTime(), nullable=False, server_default=sa.text('CURRENT_TIMESTAMP')),
         sa.PrimaryKeyConstraint('id')
     )
