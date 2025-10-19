@@ -1399,6 +1399,79 @@ def build_api() -> FastAPI:
         
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
+    # === PHASE 2: Regex Extraction Endpoint ===
+    
+    @app.post(
+        "/extract/regex",
+        tags=["extraction"],
+        summary="Extract fields using regex patterns",
+        description="Extract structured data from text using regex patterns defined in an extraction schema.",
+    )
+    async def extract_with_regex(
+        request: Request,
+        schema_id: str = Body(..., description="ID of the extraction schema to use"),
+        text: str = Body(..., description="Text content to extract from"),
+        extractor_id: Optional[str] = Body(None, description="Optional specific extractor configuration to use"),
+        tenant_ctx: Dict[str, str] = Depends(require_key),
+        session: AsyncSession = Depends(get_session),
+    ):
+        """
+        Extract structured fields from text using regex patterns.
+        
+        Uses extraction schemas to define fields and patterns for extraction.
+        Returns extracted values with confidence scores and citations.
+        """
+        from core.config import build_error_response
+        from document_processing.services import regex_extractor_service
+        
+        tenant_id = tenant_ctx["tenant"]
+        
+        try:
+            result = await regex_extractor_service.extract_with_schema(
+                db=session,
+                tenant_id=tenant_id,
+                schema_id=schema_id,
+                text=text,
+                extractor_id=extractor_id
+            )
+            
+            logger.info(
+                "Regex extraction completed",
+                extra={
+                    "context": {
+                        "schema_id": schema_id,
+                        "extractor_id": extractor_id,
+                        "extracted_count": result["extracted_count"],
+                        "total_fields": result["total_fields"],
+                        "tenant_id": tenant_id,
+                    }
+                }
+            )
+            
+            return result
+            
+        except ValueError as e:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=build_error_response("resource_not_found", str(e))
+            )
+        except Exception as e:
+            logger.error(
+                "Regex extraction failed",
+                extra={
+                    "context": {
+                        "schema_id": schema_id,
+                        "error": str(e),
+                        "tenant_id": tenant_id,
+                    }
+                },
+                exc_info=True
+            )
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=build_error_response("extraction_error", f"Extraction failed: {str(e)}")
+            )
+
     # File upload endpoint (protected)
     @app.post(
         "/extract/upload",
