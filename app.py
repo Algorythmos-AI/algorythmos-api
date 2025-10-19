@@ -324,7 +324,9 @@ class MetricsMiddleware(BaseHTTPMiddleware):
         status_code = str(response.status_code)
         
         # Get or create metrics
-        requests_total, request_duration = _get_or_create_metrics()
+        metrics = _get_or_create_metrics()
+        requests_total = metrics[0]
+        request_duration = metrics[1]
         
         # Record metrics
         if requests_total and request_duration:
@@ -400,25 +402,66 @@ def _enforce_rate_limit(tenant_id: str) -> None:
 
 async def require_key(
     request: Request,
-    x_api_key: Optional[str] = Header(default=None),
-    x_tenant_id: Optional[str] = Header(default=None),
+    x_api_key: Optional[str] = Header(default=None, alias="x-api-key"),
+    authorization: Optional[str] = Header(default=None),
+    x_tenant_id: Optional[str] = Header(default=None, alias="x-tenant-id"),
+    x_extend_api_version: Optional[str] = Header(default=None, alias="x-extend-api-version"),
+    x_api_version: Optional[str] = Header(default=None, alias="x-api-version"),
 ) -> Dict[str, str]:
-    """Validate API key and tenant ID."""
-    if x_api_key != settings.ALG_API_KEY:
+    """
+    Validate authentication and extract tenant context.
+    
+    Supports:
+    - X-API-Key header (legacy)
+    - Authorization: Bearer <token> header (Extend parity)
+    - X-Tenant-ID header (required, 400 if missing)
+    - x-extend-api-version or x-api-version header (optional, stored for tracking)
+    """
+    # Extract Bearer token if present
+    bearer_token = None
+    if authorization and authorization.startswith("Bearer "):
+        bearer_token = authorization[7:]  # Strip "Bearer " prefix
+    
+    # Authenticate: Bearer token OR API key required
+    authenticated = False
+    if bearer_token:
+        # Validate Bearer token (for now, use same validation as API key)
+        # In production, implement proper JWT validation
+        if bearer_token == settings.ALG_API_KEY:
+            authenticated = True
+    elif x_api_key:
+        # Validate API key
+        if x_api_key == settings.ALG_API_KEY:
+            authenticated = True
+    
+    if not authenticated:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, 
-            detail={"code": "UNAUTHORIZED", "message": "Invalid API key"}
+            detail={"code": "UNAUTHORIZED", "message": "Invalid or missing authentication"}
         )
     
+    # Require X-Tenant-ID header
     if not x_tenant_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, 
-            detail={"code": "MISSING_TENANT", "message": "Missing X-Tenant-Id header"}
+            detail={"code": "MISSING_TENANT", "message": "Missing X-Tenant-ID header"}
         )
-
+    
+    # Enforce rate limiting
     _enforce_rate_limit(x_tenant_id)
+    
+    # Store context in request state
     request.state.tenant_id = x_tenant_id
-    return {"tenant": x_tenant_id}
+    
+    # Determine API version (prefer x-extend-api-version, fallback to x-api-version)
+    api_version = x_extend_api_version or x_api_version or "2025-04-21"  # Default version
+    request.state.api_version = api_version
+    
+    return {
+        "tenant": x_tenant_id,
+        "api_version": api_version
+    }
+
 
 
 async def _run_extraction(
