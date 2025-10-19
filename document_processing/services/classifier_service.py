@@ -36,7 +36,8 @@ async def create_classifier(
         select(ClassifierDB).where(
             and_(
                 ClassifierDB.tenant_id == tenant_id,
-                ClassifierDB.name == request.name
+                ClassifierDB.name == request.name,
+                ClassifierDB.is_deleted == False
             )
         )
     )
@@ -88,7 +89,8 @@ async def get_classifier(
         select(ClassifierDB).where(
             and_(
                 ClassifierDB.id == classifier_id,
-                ClassifierDB.tenant_id == tenant_id
+                ClassifierDB.tenant_id == tenant_id,
+                ClassifierDB.is_deleted == False
             )
         )
     )
@@ -104,49 +106,46 @@ async def list_classifiers(
     db: AsyncSession,
     tenant_id: str,
     limit: int = 20,
-    cursor: Optional[str] = None,
+    offset: int = 0,
     enabled: Optional[bool] = None
-) -> Tuple[List[ClassifierConfig], int, Optional[str], bool]:
+) -> Tuple[List[ClassifierConfig], int]:
     """List classifiers with pagination and filters.
     
     Args:
         db: Database session
         tenant_id: Tenant identifier
         limit: Maximum number of items to return
-        cursor: Pagination cursor (created_at timestamp)
+        offset: Number of items to skip
         enabled: Filter by enabled status
     
     Returns:
-        Tuple of (classifiers, total_count, next_cursor, has_more)
+        Tuple of (classifiers, total_count)
     """
     # Build query
-    query = select(ClassifierDB).where(ClassifierDB.tenant_id == tenant_id)
+    query = select(ClassifierDB).where(
+        and_(
+            ClassifierDB.tenant_id == tenant_id,
+            ClassifierDB.is_deleted == False
+        )
+    )
     
     if enabled is not None:
         query = query.where(ClassifierDB.enabled == enabled)
     
-    if cursor:
-        query = query.where(ClassifierDB.created_at < datetime.fromisoformat(cursor))
-    
-    # Order by created_at descending (newest first)
-    query = query.order_by(ClassifierDB.created_at.desc()).limit(limit + 1)
+    # Order by created_at descending (newest first) and apply pagination
+    query = query.order_by(ClassifierDB.created_at.desc()).offset(offset).limit(limit)
     
     # Execute query
     result = await db.execute(query)
     classifiers = result.scalars().all()
     
-    # Check if there are more results
-    has_more = len(classifiers) > limit
-    if has_more:
-        classifiers = classifiers[:limit]
-    
-    # Calculate next cursor
-    next_cursor = None
-    if has_more and classifiers:
-        next_cursor = classifiers[-1].created_at.isoformat()
-    
     # Get total count
-    count_query = select(ClassifierDB).where(ClassifierDB.tenant_id == tenant_id)
+    count_query = select(ClassifierDB).where(
+        and_(
+            ClassifierDB.tenant_id == tenant_id,
+            ClassifierDB.is_deleted == False
+        )
+    )
     if enabled is not None:
         count_query = count_query.where(ClassifierDB.enabled == enabled)
     
@@ -155,9 +154,7 @@ async def list_classifiers(
     
     return (
         [_db_to_pydantic(c) for c in classifiers],
-        total,
-        next_cursor,
-        has_more
+        total
     )
 
 
@@ -182,7 +179,8 @@ async def update_classifier(
         select(ClassifierDB).where(
             and_(
                 ClassifierDB.id == classifier_id,
-                ClassifierDB.tenant_id == tenant_id
+                ClassifierDB.tenant_id == tenant_id,
+                ClassifierDB.is_deleted == False
             )
         )
     )
@@ -190,6 +188,20 @@ async def update_classifier(
     
     if not db_classifier:
         return None
+    
+    # Check for duplicate name if name is being changed
+    if request.name is not None and request.name != db_classifier.name:
+        existing_result = await db.execute(
+            select(ClassifierDB).where(
+                and_(
+                    ClassifierDB.tenant_id == tenant_id,
+                    ClassifierDB.name == request.name,
+                    ClassifierDB.is_deleted == False
+                )
+            )
+        )
+        if existing_result.scalar_one_or_none():
+            raise ValueError(f"Classifier with name '{request.name}' already exists for this tenant")
     
     # Update fields
     if request.name is not None:
@@ -214,7 +226,7 @@ async def delete_classifier(
     tenant_id: str,
     classifier_id: str
 ) -> bool:
-    """Delete a classifier.
+    """Soft delete a classifier.
     
     Args:
         db: Database session
@@ -228,7 +240,8 @@ async def delete_classifier(
         select(ClassifierDB).where(
             and_(
                 ClassifierDB.id == classifier_id,
-                ClassifierDB.tenant_id == tenant_id
+                ClassifierDB.tenant_id == tenant_id,
+                ClassifierDB.is_deleted == False
             )
         )
     )
@@ -237,7 +250,10 @@ async def delete_classifier(
     if not db_classifier:
         return False
     
-    await db.delete(db_classifier)
+    # Soft delete: set is_deleted flag
+    db_classifier.is_deleted = True
+    db_classifier.updated_at = datetime.utcnow()
+    
     await db.commit()
     
     return True

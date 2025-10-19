@@ -36,7 +36,8 @@ async def create_splitter(
         select(SplitterDB).where(
             and_(
                 SplitterDB.tenant_id == tenant_id,
-                SplitterDB.name == request.name
+                SplitterDB.name == request.name,
+                SplitterDB.is_deleted == False
             )
         )
     )
@@ -87,7 +88,8 @@ async def get_splitter(
         select(SplitterDB).where(
             and_(
                 SplitterDB.id == splitter_id,
-                SplitterDB.tenant_id == tenant_id
+                SplitterDB.tenant_id == tenant_id,
+                SplitterDB.is_deleted == False
             )
         )
     )
@@ -103,49 +105,46 @@ async def list_splitters(
     db: AsyncSession,
     tenant_id: str,
     limit: int = 20,
-    cursor: Optional[str] = None,
+    offset: int = 0,
     enabled: Optional[bool] = None
-) -> Tuple[List[SplitterConfig], int, Optional[str], bool]:
+) -> Tuple[List[SplitterConfig], int]:
     """List splitters with pagination and filters.
     
     Args:
         db: Database session
         tenant_id: Tenant identifier
         limit: Maximum number of items to return
-        cursor: Pagination cursor (created_at timestamp)
+        offset: Number of items to skip
         enabled: Filter by enabled status
     
     Returns:
-        Tuple of (splitters, total_count, next_cursor, has_more)
+        Tuple of (splitters, total_count)
     """
     # Build query
-    query = select(SplitterDB).where(SplitterDB.tenant_id == tenant_id)
+    query = select(SplitterDB).where(
+        and_(
+            SplitterDB.tenant_id == tenant_id,
+            SplitterDB.is_deleted == False
+        )
+    )
     
     if enabled is not None:
         query = query.where(SplitterDB.enabled == enabled)
     
-    if cursor:
-        query = query.where(SplitterDB.created_at < datetime.fromisoformat(cursor))
-    
-    # Order by created_at descending (newest first)
-    query = query.order_by(SplitterDB.created_at.desc()).limit(limit + 1)
+    # Order by created_at descending (newest first) and apply pagination
+    query = query.order_by(SplitterDB.created_at.desc()).offset(offset).limit(limit)
     
     # Execute query
     result = await db.execute(query)
     splitters = result.scalars().all()
     
-    # Check if there are more results
-    has_more = len(splitters) > limit
-    if has_more:
-        splitters = splitters[:limit]
-    
-    # Calculate next cursor
-    next_cursor = None
-    if has_more and splitters:
-        next_cursor = splitters[-1].created_at.isoformat()
-    
     # Get total count
-    count_query = select(SplitterDB).where(SplitterDB.tenant_id == tenant_id)
+    count_query = select(SplitterDB).where(
+        and_(
+            SplitterDB.tenant_id == tenant_id,
+            SplitterDB.is_deleted == False
+        )
+    )
     if enabled is not None:
         count_query = count_query.where(SplitterDB.enabled == enabled)
     
@@ -154,9 +153,7 @@ async def list_splitters(
     
     return (
         [_db_to_pydantic(s) for s in splitters],
-        total,
-        next_cursor,
-        has_more
+        total
     )
 
 
@@ -181,7 +178,8 @@ async def update_splitter(
         select(SplitterDB).where(
             and_(
                 SplitterDB.id == splitter_id,
-                SplitterDB.tenant_id == tenant_id
+                SplitterDB.tenant_id == tenant_id,
+                SplitterDB.is_deleted == False
             )
         )
     )
@@ -189,6 +187,20 @@ async def update_splitter(
     
     if not db_splitter:
         return None
+    
+    # Check for duplicate name if name is being changed
+    if request.name is not None and request.name != db_splitter.name:
+        existing_result = await db.execute(
+            select(SplitterDB).where(
+                and_(
+                    SplitterDB.tenant_id == tenant_id,
+                    SplitterDB.name == request.name,
+                    SplitterDB.is_deleted == False
+                )
+            )
+        )
+        if existing_result.scalar_one_or_none():
+            raise ValueError(f"Splitter with name '{request.name}' already exists for this tenant")
     
     # Update fields
     if request.name is not None:
@@ -211,7 +223,7 @@ async def delete_splitter(
     tenant_id: str,
     splitter_id: str
 ) -> bool:
-    """Delete a splitter.
+    """Soft delete a splitter.
     
     Args:
         db: Database session
@@ -225,7 +237,8 @@ async def delete_splitter(
         select(SplitterDB).where(
             and_(
                 SplitterDB.id == splitter_id,
-                SplitterDB.tenant_id == tenant_id
+                SplitterDB.tenant_id == tenant_id,
+                SplitterDB.is_deleted == False
             )
         )
     )
@@ -234,7 +247,10 @@ async def delete_splitter(
     if not db_splitter:
         return False
     
-    await db.delete(db_splitter)
+    # Soft delete: set is_deleted flag
+    db_splitter.is_deleted = True
+    db_splitter.updated_at = datetime.utcnow()
+    
     await db.commit()
     
     return True
