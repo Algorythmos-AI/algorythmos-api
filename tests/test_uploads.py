@@ -7,13 +7,12 @@ from typing import Generator
 import pytest
 from fastapi.testclient import TestClient
 
-from app import build_api
+from app import app
 
 
 @pytest.fixture
 def client() -> Generator[TestClient, None, None]:
     """Create a test client for the FastAPI app."""
-    app = build_api()
     yield TestClient(app)
 
 
