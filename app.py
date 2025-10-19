@@ -30,6 +30,19 @@ from vendor_libs.utils.security import parse_signature_header, verify_hmac_sha25
 from vendor_libs.utils.observability import metrics_app, runs_started, runs_succeeded, runs_failed
 from prometheus_client import Counter, Histogram
 
+# Production middleware imports
+from document_processing.middleware import RateLimitMiddleware, IdempotencyMiddleware
+
+# Initialize metrics
+http_requests_total = None
+http_request_duration_seconds = None
+webhook_deliveries_total = None
+webhook_delivery_duration_seconds = None
+parser_runs_total = None
+parser_run_duration_seconds = None
+rate_limit_hits_total = None
+idempotency_replays_total = None
+
 # Generic document processing imports
 from document_processing.schemas import (
     CreateSchemaRequest,
@@ -149,6 +162,9 @@ http_request_duration_seconds = None
 def _get_or_create_metrics():
     """Get or create HTTP metrics (handles reloads in tests)."""
     global http_requests_total, http_request_duration_seconds
+    global webhook_deliveries_total, webhook_delivery_duration_seconds
+    global parser_runs_total, parser_run_duration_seconds
+    global rate_limit_hits_total, idempotency_replays_total
     
     if http_requests_total is None:
         try:
@@ -179,7 +195,96 @@ def _get_or_create_metrics():
                 next((c for c in REGISTRY._collector_to_names if hasattr(c, '_name') and c._name == 'http_request_duration_seconds'), None)
             )
     
-    return http_requests_total, http_request_duration_seconds
+    # Webhook metrics
+    if webhook_deliveries_total is None:
+        try:
+            webhook_deliveries_total = Counter(
+                "webhook_deliveries_total",
+                "Total webhook deliveries",
+                ["event_type", "status"]
+            )
+        except ValueError:
+            from prometheus_client import REGISTRY
+            webhook_deliveries_total = REGISTRY._collector_to_names.get(
+                next((c for c in REGISTRY._collector_to_names if hasattr(c, '_name') and c._name == 'webhook_deliveries_total'), None)
+            )
+    
+    if webhook_delivery_duration_seconds is None:
+        try:
+            webhook_delivery_duration_seconds = Histogram(
+                "webhook_delivery_duration_seconds",
+                "Webhook delivery latency",
+                ["event_type", "status"],
+                buckets=(0.1, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0)
+            )
+        except ValueError:
+            from prometheus_client import REGISTRY
+            webhook_delivery_duration_seconds = REGISTRY._collector_to_names.get(
+                next((c for c in REGISTRY._collector_to_names if hasattr(c, '_name') and c._name == 'webhook_delivery_duration_seconds'), None)
+            )
+    
+    # Parser run metrics
+    if parser_runs_total is None:
+        try:
+            parser_runs_total = Counter(
+                "parser_runs_total",
+                "Total parser runs",
+                ["status", "format"]
+            )
+        except ValueError:
+            from prometheus_client import REGISTRY
+            parser_runs_total = REGISTRY._collector_to_names.get(
+                next((c for c in REGISTRY._collector_to_names if hasattr(c, '_name') and c._name == 'parser_runs_total'), None)
+            )
+    
+    if parser_run_duration_seconds is None:
+        try:
+            parser_run_duration_seconds = Histogram(
+                "parser_run_duration_seconds",
+                "Parser run latency",
+                ["status", "format"],
+                buckets=(0.1, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 120.0)
+            )
+        except ValueError:
+            from prometheus_client import REGISTRY
+            parser_run_duration_seconds = REGISTRY._collector_to_names.get(
+                next((c for c in REGISTRY._collector_to_names if hasattr(c, '_name') and c._name == 'parser_run_duration_seconds'), None)
+            )
+    
+    # Rate limiting metrics
+    if rate_limit_hits_total is None:
+        try:
+            rate_limit_hits_total = Counter(
+                "rate_limit_hits_total",
+                "Total rate limit hits",
+                ["tenant_id", "limit_type"]
+            )
+        except ValueError:
+            from prometheus_client import REGISTRY
+            rate_limit_hits_total = REGISTRY._collector_to_names.get(
+                next((c for c in REGISTRY._collector_to_names if hasattr(c, '_name') and c._name == 'rate_limit_hits_total'), None)
+            )
+    
+    # Idempotency metrics
+    if idempotency_replays_total is None:
+        try:
+            idempotency_replays_total = Counter(
+                "idempotency_replays_total",
+                "Total idempotency key replays",
+                ["tenant_id", "endpoint"]
+            )
+        except ValueError:
+            from prometheus_client import REGISTRY
+            idempotency_replays_total = REGISTRY._collector_to_names.get(
+                next((c for c in REGISTRY._collector_to_names if hasattr(c, '_name') and c._name == 'idempotency_replays_total'), None)
+            )
+    
+    return (
+        http_requests_total, http_request_duration_seconds,
+        webhook_deliveries_total, webhook_delivery_duration_seconds,
+        parser_runs_total, parser_run_duration_seconds,
+        rate_limit_hits_total, idempotency_replays_total
+    )
 
 
 class MetricsMiddleware(BaseHTTPMiddleware):
@@ -589,6 +694,11 @@ def build_api() -> FastAPI:
         allow_headers=["Authorization", "Content-Type", "Idempotency-Key", "X-Request-ID", "*"],
         expose_headers=["X-Request-ID"],  # So the browser can read it for debugging
     )
+    
+    # Production middlewares
+    app.add_middleware(RateLimitMiddleware, requests_per_minute=60, requests_per_hour=1000)
+    app.add_middleware(IdempotencyMiddleware, ttl_seconds=86400)  # 24 hours
+    
     app.add_middleware(MetricsMiddleware)
     app.add_middleware(FileSizeMiddleware)
     app.add_middleware(RequestContextMiddleware)
