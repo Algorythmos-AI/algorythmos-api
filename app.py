@@ -644,7 +644,7 @@ def build_api() -> FastAPI:
         session: AsyncSession = Depends(get_session),
     ) -> ExtractionSchema:
         """Create a new extraction schema."""
-        tenant_id = tenant_ctx["tenant_id"]
+        tenant_id = tenant_ctx["tenant"]
         
         try:
             schema = await SchemaService.create_schema(
@@ -685,7 +685,7 @@ def build_api() -> FastAPI:
         session: AsyncSession = Depends(get_session),
     ) -> SchemaListResponse:
         """List extraction schemas."""
-        tenant_id = tenant_ctx["tenant_id"]
+        tenant_id = tenant_ctx["tenant"]
         
         response = await SchemaService.list_schemas(
             session=session,
@@ -710,7 +710,7 @@ def build_api() -> FastAPI:
         session: AsyncSession = Depends(get_session),
     ) -> ExtractionSchema:
         """Get schema by ID."""
-        tenant_id = tenant_ctx["tenant_id"]
+        tenant_id = tenant_ctx["tenant"]
         
         schema = await SchemaService.get_schema(
             session=session,
@@ -741,7 +741,7 @@ def build_api() -> FastAPI:
         session: AsyncSession = Depends(get_session),
     ) -> ExtractionSchema:
         """Update an existing schema."""
-        tenant_id = tenant_ctx["tenant_id"]
+        tenant_id = tenant_ctx["tenant"]
         
         try:
             schema = await SchemaService.update_schema(
@@ -789,7 +789,7 @@ def build_api() -> FastAPI:
         session: AsyncSession = Depends(get_session),
     ) -> Response:
         """Delete a schema."""
-        tenant_id = tenant_ctx["tenant_id"]
+        tenant_id = tenant_ctx["tenant"]
         
         deleted = await SchemaService.delete_schema(
             session=session,
