@@ -3,7 +3,7 @@
 ## Execution Status
 
 **Started:** 2025-10-19
-**Current Phase:** PHASE 2 - Regex Extractor  
+**Current Phase:** PHASE 4 - Advanced Parsing  
 **Overall Status:** IN_PROGRESS
 
 ---
@@ -70,31 +70,74 @@
 
 ---
 
-## PHASE 2: Regex Extractor 🔍
+## PHASE 2: Regex Extractor ✓
 
-**Status:** NOT_STARTED
+**Status:** COMPLETE
 
-### Checklist
-- [ ] Create `document_chunks` usage plan
-- [ ] Implement `regex_extractor.py` service
-- [ ] Add `POST /extract/regex` endpoint
-- [ ] Implement citations and confidence scoring
-- [ ] Add tests
-- [ ] Verify with curl
+### Completed ✓
+- [x] Created `regex_extractor_service.py` (183 lines)
+- [x] Implemented multi-pattern field extraction with confidence scoring
+- [x] Added citation extraction with character offsets
+- [x] Created `POST /extract/regex` endpoint
+- [x] Added comprehensive tests (test_phase2_regex_extraction.py)
+- [x] Verified endpoint functionality
+
+### Implementation Details
+- **Service:** Extracts fields using regex patterns from schemas
+- **Features:**
+  - Multi-pattern support per field with priority
+  - Named capture group extraction
+  - Confidence scoring (0.0-1.0) based on match quality
+  - Citation extraction with text snippets and positions
+  - Case sensitivity and multiline options
+- **Endpoint:** POST /api/extract/regex
+  - Request: {schema_id, text, options: {case_sensitive, multiline, dotall}}
+  - Response: {fields: {}, confidence, citations: []}
+  - Error handling: SCHEMA_NOT_FOUND, INVALID_SCHEMA, extraction_error
+
+### Notes
+- Confidence calculated based on pattern match and value validation
+- Citations include character offsets for provenance tracking
+- Supports multiple patterns per field for robust extraction
 
 ---
 
-## PHASE 3: Classification & Splitting 🏷️
+## PHASE 3: Classification & Splitting ✓
 
-**Status:** NOT_STARTED
+**Status:** COMPLETE
 
-### Checklist
-- [ ] Implement keyword classifier service
-- [ ] Add `POST /classify` endpoint
-- [ ] Implement rule-based splitter service
-- [ ] Add `POST /split` endpoint
-- [ ] Add tests
-- [ ] Verify with curl
+### Completed ✓
+- [x] Created `classification_service.py` (137 lines)
+- [x] Implemented keyword-based classification with confidence scoring
+- [x] Created `splitting_service.py` (194 lines)
+- [x] Implemented four splitting strategies (delimiter, pattern, fixed_size, paragraph)
+- [x] Added `POST /classify` endpoint
+- [x] Added `POST /split` endpoint
+- [x] Added comprehensive tests (test_phase3_classification_splitting.py)
+- [x] Verified endpoint functionality
+
+### Implementation Details
+- **Classification Service:**
+  - Keyword-based document classification
+  - Confidence scoring based on keyword density (matched/total)
+  - Returns top category with confidence score
+  - Supports multiple categories per classifier
+  
+- **Splitting Service:**
+  - Four strategies: delimiter, pattern (regex), fixed_size, paragraph
+  - Returns chunks with metadata and position tracking
+  - Each chunk includes: content, chunk_index, start_pos, end_pos, metadata
+  
+- **Endpoints:**
+  - POST /api/classify: {text, classifier_id?} → {top_category, classifications[], classifiers_used}
+  - POST /api/split: {text, splitter_id?} → {splitter_id, split_strategy, chunks[], chunk_count}
+  - Both validate resource existence and tenant ownership
+
+### Notes
+- Classification supports multi-category matching with confidence ordering
+- Splitting strategies cover different document structures
+- Chunk metadata preserves split type and position information
+- Route count increased to 41
 
 ---
 
@@ -162,7 +205,10 @@
 
 | Phase | Commit SHA | Message | Date |
 |-------|-----------|---------|------|
-| 0 | - | (in progress) | 2025-10-19 |
+| 0 | - | fix(core): align tenant_ctx usage... | 2025-10-19 |
+| 1 | - | feat(phase1): schemas, extractors, classifiers, splitters with soft-delete + offset pagination | 2025-10-19 |
+| 2 | - | feat(phase2): regex-based field extraction with citations and confidence | 2025-10-19 |
+| 3 | - | feat(phase3): keyword classification and rule-based document splitting | 2025-10-19 |
 
 ---
 
