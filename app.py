@@ -14,7 +14,7 @@ from uuid import uuid4
 
 import anyio
 import httpx
-from fastapi import BackgroundTasks, Depends, FastAPI, File, Header, HTTPException, Request, Response, UploadFile, status
+from fastapi import BackgroundTasks, Depends, FastAPI, File, Header, HTTPException, Request, Response, UploadFile, status, Path as PathParam, Query, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.params import Body, Query
 from pydantic import AnyHttpUrl, BaseModel, ConfigDict
@@ -36,8 +36,20 @@ from document_processing.schemas import (
     UpdateSchemaRequest,
     ExtractionSchema,
     SchemaListResponse,
+    CreateExtractorRequest,
+    UpdateExtractorRequest,
+    ExtractorConfig,
+    CreateClassifierRequest,
+    UpdateClassifierRequest,
+    ClassifierConfig,
+    CreateSplitterRequest,
+    UpdateSplitterRequest,
+    SplitterConfig,
 )
 from document_processing.services.schema_service import SchemaService
+from document_processing.services import extractor_service
+from document_processing.services import classifier_service
+from document_processing.services import splitter_service
 
 # Database imports - use direct module references to avoid package conflicts
 from sqlalchemy import select, and_, func
@@ -808,6 +820,570 @@ def build_api() -> FastAPI:
             extra={
                 "context": {
                     "schema_id": schema_id,
+                    "tenant_id": tenant_id,
+                }
+            }
+        )
+        
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    # Extractor Management Endpoints
+    @app.post(
+        "/extractors",
+        response_model=ExtractorConfig,
+        status_code=status.HTTP_201_CREATED,
+        tags=["extractors"],
+        summary="Create extractor",
+        description="Create a new extractor that uses a schema to extract data from documents.",
+    )
+    async def create_extractor(
+        request: Request,
+        payload: CreateExtractorRequest = Body(...),
+        tenant_ctx: Dict[str, str] = Depends(require_key),
+        session: AsyncSession = Depends(get_session),
+    ) -> ExtractorConfig:
+        """Create a new extractor."""
+        tenant_id = tenant_ctx["tenant"]
+        
+        try:
+            extractor = await extractor_service.create_extractor(
+                db=session,
+                tenant_id=tenant_id,
+                request=payload,
+            )
+            logger.info(
+                "Extractor created",
+                extra={
+                    "context": {
+                        "extractor_id": extractor.extractor_id,
+                        "extractor_name": extractor.name,
+                        "schema_id": extractor.schema_id,
+                        "tenant_id": tenant_id,
+                    }
+                }
+            )
+            return extractor
+        except ValueError as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"code": "INVALID_EXTRACTOR", "message": str(e)}
+            )
+    
+    @app.get(
+        "/extractors",
+        tags=["extractors"],
+        summary="List extractors",
+        description="Get a paginated list of extractors for this tenant.",
+    )
+    async def list_extractors(
+        request: Request,
+        limit: int = Query(20, ge=1, le=100, description="Maximum number of results"),
+        cursor: Optional[str] = Query(None, description="Pagination cursor"),
+        schema_id: Optional[str] = Query(None, description="Filter by schema ID"),
+        enabled: Optional[bool] = Query(None, description="Filter by enabled status"),
+        tenant_ctx: Dict[str, str] = Depends(require_key),
+        session: AsyncSession = Depends(get_session),
+    ):
+        """List extractors for the tenant."""
+        tenant_id = tenant_ctx["tenant"]
+        
+        extractors, total, next_cursor, has_more = await extractor_service.list_extractors(
+            db=session,
+            tenant_id=tenant_id,
+            limit=limit,
+            cursor=cursor,
+            schema_id=schema_id,
+            enabled=enabled,
+        )
+        
+        return {
+            "items": extractors,
+            "total": total,
+            "limit": limit,
+            "cursor": next_cursor,
+            "has_more": has_more,
+        }
+    
+    @app.get(
+        "/extractors/{extractor_id}",
+        response_model=ExtractorConfig,
+        tags=["extractors"],
+        summary="Get extractor",
+        description="Get details of a specific extractor by ID.",
+    )
+    async def get_extractor(
+        request: Request,
+        extractor_id: str = PathParam(..., description="Extractor ID"),
+        tenant_ctx: Dict[str, str] = Depends(require_key),
+        session: AsyncSession = Depends(get_session),
+    ) -> ExtractorConfig:
+        """Get an extractor by ID."""
+        tenant_id = tenant_ctx["tenant"]
+        
+        extractor = await extractor_service.get_extractor(
+            db=session,
+            tenant_id=tenant_id,
+            extractor_id=extractor_id,
+        )
+        
+        if not extractor:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"code": "EXTRACTOR_NOT_FOUND", "message": f"Extractor '{extractor_id}' not found"}
+            )
+        
+        return extractor
+    
+    @app.patch(
+        "/extractors/{extractor_id}",
+        response_model=ExtractorConfig,
+        tags=["extractors"],
+        summary="Update extractor",
+        description="Update an existing extractor's configuration.",
+    )
+    async def update_extractor(
+        request: Request,
+        extractor_id: str = PathParam(..., description="Extractor ID"),
+        payload: UpdateExtractorRequest = Body(...),
+        tenant_ctx: Dict[str, str] = Depends(require_key),
+        session: AsyncSession = Depends(get_session),
+    ) -> ExtractorConfig:
+        """Update an extractor."""
+        tenant_id = tenant_ctx["tenant"]
+        
+        extractor = await extractor_service.update_extractor(
+            db=session,
+            tenant_id=tenant_id,
+            extractor_id=extractor_id,
+            request=payload,
+        )
+        
+        if not extractor:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"code": "EXTRACTOR_NOT_FOUND", "message": f"Extractor '{extractor_id}' not found"}
+            )
+        
+        logger.info(
+            "Extractor updated",
+            extra={
+                "context": {
+                    "extractor_id": extractor.extractor_id,
+                    "extractor_name": extractor.name,
+                    "tenant_id": tenant_id,
+                }
+            }
+        )
+        
+        return extractor
+    
+    @app.delete(
+        "/extractors/{extractor_id}",
+        status_code=status.HTTP_204_NO_CONTENT,
+        tags=["extractors"],
+        summary="Delete extractor",
+        description="Delete an extractor permanently.",
+    )
+    async def delete_extractor(
+        request: Request,
+        extractor_id: str = PathParam(..., description="Extractor ID"),
+        tenant_ctx: Dict[str, str] = Depends(require_key),
+        session: AsyncSession = Depends(get_session),
+    ):
+        """Delete an extractor."""
+        tenant_id = tenant_ctx["tenant"]
+        
+        deleted = await extractor_service.delete_extractor(
+            db=session,
+            tenant_id=tenant_id,
+            extractor_id=extractor_id,
+        )
+        
+        if not deleted:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"code": "EXTRACTOR_NOT_FOUND", "message": f"Extractor '{extractor_id}' not found"}
+            )
+        
+        logger.info(
+            "Extractor deleted",
+            extra={
+                "context": {
+                    "extractor_id": extractor_id,
+                    "tenant_id": tenant_id,
+                }
+            }
+        )
+        
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    # Classifier Management Endpoints
+    @app.post(
+        "/classifiers",
+        response_model=ClassifierConfig,
+        status_code=status.HTTP_201_CREATED,
+        tags=["classifiers"],
+        summary="Create classifier",
+        description="Create a new classifier for document classification.",
+    )
+    async def create_classifier(
+        request: Request,
+        payload: CreateClassifierRequest = Body(...),
+        tenant_ctx: Dict[str, str] = Depends(require_key),
+        session: AsyncSession = Depends(get_session),
+    ) -> ClassifierConfig:
+        """Create a new classifier."""
+        tenant_id = tenant_ctx["tenant"]
+        
+        try:
+            classifier = await classifier_service.create_classifier(
+                db=session,
+                tenant_id=tenant_id,
+                request=payload,
+            )
+            logger.info(
+                "Classifier created",
+                extra={
+                    "context": {
+                        "classifier_id": classifier.classifier_id,
+                        "classifier_name": classifier.name,
+                        "tenant_id": tenant_id,
+                    }
+                }
+            )
+            return classifier
+        except ValueError as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"code": "INVALID_CLASSIFIER", "message": str(e)}
+            )
+    
+    @app.get(
+        "/classifiers",
+        tags=["classifiers"],
+        summary="List classifiers",
+        description="Get a paginated list of classifiers for this tenant.",
+    )
+    async def list_classifiers(
+        request: Request,
+        limit: int = Query(20, ge=1, le=100, description="Maximum number of results"),
+        cursor: Optional[str] = Query(None, description="Pagination cursor"),
+        enabled: Optional[bool] = Query(None, description="Filter by enabled status"),
+        tenant_ctx: Dict[str, str] = Depends(require_key),
+        session: AsyncSession = Depends(get_session),
+    ):
+        """List classifiers for the tenant."""
+        tenant_id = tenant_ctx["tenant"]
+        
+        classifiers, total, next_cursor, has_more = await classifier_service.list_classifiers(
+            db=session,
+            tenant_id=tenant_id,
+            limit=limit,
+            cursor=cursor,
+            enabled=enabled,
+        )
+        
+        return {
+            "items": classifiers,
+            "total": total,
+            "limit": limit,
+            "cursor": next_cursor,
+            "has_more": has_more,
+        }
+    
+    @app.get(
+        "/classifiers/{classifier_id}",
+        response_model=ClassifierConfig,
+        tags=["classifiers"],
+        summary="Get classifier",
+        description="Get details of a specific classifier by ID.",
+    )
+    async def get_classifier(
+        request: Request,
+        classifier_id: str = PathParam(..., description="Classifier ID"),
+        tenant_ctx: Dict[str, str] = Depends(require_key),
+        session: AsyncSession = Depends(get_session),
+    ) -> ClassifierConfig:
+        """Get a classifier by ID."""
+        tenant_id = tenant_ctx["tenant"]
+        
+        classifier = await classifier_service.get_classifier(
+            db=session,
+            tenant_id=tenant_id,
+            classifier_id=classifier_id,
+        )
+        
+        if not classifier:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"code": "CLASSIFIER_NOT_FOUND", "message": f"Classifier '{classifier_id}' not found"}
+            )
+        
+        return classifier
+    
+    @app.patch(
+        "/classifiers/{classifier_id}",
+        response_model=ClassifierConfig,
+        tags=["classifiers"],
+        summary="Update classifier",
+        description="Update an existing classifier's configuration.",
+    )
+    async def update_classifier(
+        request: Request,
+        classifier_id: str = PathParam(..., description="Classifier ID"),
+        payload: UpdateClassifierRequest = Body(...),
+        tenant_ctx: Dict[str, str] = Depends(require_key),
+        session: AsyncSession = Depends(get_session),
+    ) -> ClassifierConfig:
+        """Update a classifier."""
+        tenant_id = tenant_ctx["tenant"]
+        
+        classifier = await classifier_service.update_classifier(
+            db=session,
+            tenant_id=tenant_id,
+            classifier_id=classifier_id,
+            request=payload,
+        )
+        
+        if not classifier:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"code": "CLASSIFIER_NOT_FOUND", "message": f"Classifier '{classifier_id}' not found"}
+            )
+        
+        logger.info(
+            "Classifier updated",
+            extra={
+                "context": {
+                    "classifier_id": classifier.classifier_id,
+                    "classifier_name": classifier.name,
+                    "tenant_id": tenant_id,
+                }
+            }
+        )
+        
+        return classifier
+    
+    @app.delete(
+        "/classifiers/{classifier_id}",
+        status_code=status.HTTP_204_NO_CONTENT,
+        tags=["classifiers"],
+        summary="Delete classifier",
+        description="Delete a classifier permanently.",
+    )
+    async def delete_classifier(
+        request: Request,
+        classifier_id: str = PathParam(..., description="Classifier ID"),
+        tenant_ctx: Dict[str, str] = Depends(require_key),
+        session: AsyncSession = Depends(get_session),
+    ):
+        """Delete a classifier."""
+        tenant_id = tenant_ctx["tenant"]
+        
+        deleted = await classifier_service.delete_classifier(
+            db=session,
+            tenant_id=tenant_id,
+            classifier_id=classifier_id,
+        )
+        
+        if not deleted:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"code": "CLASSIFIER_NOT_FOUND", "message": f"Classifier '{classifier_id}' not found"}
+            )
+        
+        logger.info(
+            "Classifier deleted",
+            extra={
+                "context": {
+                    "classifier_id": classifier_id,
+                    "tenant_id": tenant_id,
+                }
+            }
+        )
+        
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    # Splitter Management Endpoints
+    @app.post(
+        "/splitters",
+        response_model=SplitterConfig,
+        status_code=status.HTTP_201_CREATED,
+        tags=["splitters"],
+        summary="Create splitter",
+        description="Create a new splitter for document splitting.",
+    )
+    async def create_splitter(
+        request: Request,
+        payload: CreateSplitterRequest = Body(...),
+        tenant_ctx: Dict[str, str] = Depends(require_key),
+        session: AsyncSession = Depends(get_session),
+    ) -> SplitterConfig:
+        """Create a new splitter."""
+        tenant_id = tenant_ctx["tenant"]
+        
+        try:
+            splitter = await splitter_service.create_splitter(
+                db=session,
+                tenant_id=tenant_id,
+                request=payload,
+            )
+            logger.info(
+                "Splitter created",
+                extra={
+                    "context": {
+                        "splitter_id": splitter.splitter_id,
+                        "splitter_name": splitter.name,
+                        "tenant_id": tenant_id,
+                    }
+                }
+            )
+            return splitter
+        except ValueError as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"code": "INVALID_SPLITTER", "message": str(e)}
+            )
+    
+    @app.get(
+        "/splitters",
+        tags=["splitters"],
+        summary="List splitters",
+        description="Get a paginated list of splitters for this tenant.",
+    )
+    async def list_splitters(
+        request: Request,
+        limit: int = Query(20, ge=1, le=100, description="Maximum number of results"),
+        cursor: Optional[str] = Query(None, description="Pagination cursor"),
+        enabled: Optional[bool] = Query(None, description="Filter by enabled status"),
+        tenant_ctx: Dict[str, str] = Depends(require_key),
+        session: AsyncSession = Depends(get_session),
+    ):
+        """List splitters for the tenant."""
+        tenant_id = tenant_ctx["tenant"]
+        
+        splitters, total, next_cursor, has_more = await splitter_service.list_splitters(
+            db=session,
+            tenant_id=tenant_id,
+            limit=limit,
+            cursor=cursor,
+            enabled=enabled,
+        )
+        
+        return {
+            "items": splitters,
+            "total": total,
+            "limit": limit,
+            "cursor": next_cursor,
+            "has_more": has_more,
+        }
+    
+    @app.get(
+        "/splitters/{splitter_id}",
+        response_model=SplitterConfig,
+        tags=["splitters"],
+        summary="Get splitter",
+        description="Get details of a specific splitter by ID.",
+    )
+    async def get_splitter(
+        request: Request,
+        splitter_id: str = PathParam(..., description="Splitter ID"),
+        tenant_ctx: Dict[str, str] = Depends(require_key),
+        session: AsyncSession = Depends(get_session),
+    ) -> SplitterConfig:
+        """Get a splitter by ID."""
+        tenant_id = tenant_ctx["tenant"]
+        
+        splitter = await splitter_service.get_splitter(
+            db=session,
+            tenant_id=tenant_id,
+            splitter_id=splitter_id,
+        )
+        
+        if not splitter:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"code": "SPLITTER_NOT_FOUND", "message": f"Splitter '{splitter_id}' not found"}
+            )
+        
+        return splitter
+    
+    @app.patch(
+        "/splitters/{splitter_id}",
+        response_model=SplitterConfig,
+        tags=["splitters"],
+        summary="Update splitter",
+        description="Update an existing splitter's configuration.",
+    )
+    async def update_splitter(
+        request: Request,
+        splitter_id: str = PathParam(..., description="Splitter ID"),
+        payload: UpdateSplitterRequest = Body(...),
+        tenant_ctx: Dict[str, str] = Depends(require_key),
+        session: AsyncSession = Depends(get_session),
+    ) -> SplitterConfig:
+        """Update a splitter."""
+        tenant_id = tenant_ctx["tenant"]
+        
+        splitter = await splitter_service.update_splitter(
+            db=session,
+            tenant_id=tenant_id,
+            splitter_id=splitter_id,
+            request=payload,
+        )
+        
+        if not splitter:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"code": "SPLITTER_NOT_FOUND", "message": f"Splitter '{splitter_id}' not found"}
+            )
+        
+        logger.info(
+            "Splitter updated",
+            extra={
+                "context": {
+                    "splitter_id": splitter.splitter_id,
+                    "splitter_name": splitter.name,
+                    "tenant_id": tenant_id,
+                }
+            }
+        )
+        
+        return splitter
+    
+    @app.delete(
+        "/splitters/{splitter_id}",
+        status_code=status.HTTP_204_NO_CONTENT,
+        tags=["splitters"],
+        summary="Delete splitter",
+        description="Delete a splitter permanently.",
+    )
+    async def delete_splitter(
+        request: Request,
+        splitter_id: str = PathParam(..., description="Splitter ID"),
+        tenant_ctx: Dict[str, str] = Depends(require_key),
+        session: AsyncSession = Depends(get_session),
+    ):
+        """Delete a splitter."""
+        tenant_id = tenant_ctx["tenant"]
+        
+        deleted = await splitter_service.delete_splitter(
+            db=session,
+            tenant_id=tenant_id,
+            splitter_id=splitter_id,
+        )
+        
+        if not deleted:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"code": "SPLITTER_NOT_FOUND", "message": f"Splitter '{splitter_id}' not found"}
+            )
+        
+        logger.info(
+            "Splitter deleted",
+            extra={
+                "context": {
+                    "splitter_id": splitter_id,
                     "tenant_id": tenant_id,
                 }
             }
