@@ -500,8 +500,49 @@ def build_api() -> FastAPI:
         version="0.1.0",
         description="Extract internet usage data from telecom PDF invoices",
         root_path="/api",  # For Vercel routing
-        lifespan=lifespan
+        lifespan=lifespan,
+        # Customize OpenAPI schema generation
+        swagger_ui_parameters={"tryItOutEnabled": True},
+        generate_unique_id_function=lambda route: f"{route.tags[0]}-{route.name}" if route.tags else route.name,
     )
+    
+    # Custom OpenAPI schema with error handling
+    @app.get("/openapi.json", include_in_schema=False)
+    async def custom_openapi():
+        """Custom OpenAPI schema endpoint with error handling."""
+        try:
+            if app.openapi_schema:
+                return app.openapi_schema
+            
+            from fastapi.openapi.utils import get_openapi
+            
+            openapi_schema = get_openapi(
+                title=app.title,
+                version=app.version,
+                description=app.description,
+                routes=app.routes,
+            )
+            
+            # Add custom metadata
+            openapi_schema["info"]["x-logo"] = {
+                "url": "https://api.algorythmos.fr/logo.png"
+            }
+            
+            app.openapi_schema = openapi_schema
+            return app.openapi_schema
+        except Exception as e:
+            logger = get_logger()
+            logger.error(f"Error generating OpenAPI schema: {e}", exc_info=True)
+            return {
+                "openapi": "3.1.0",
+                "info": {
+                    "title": app.title,
+                    "version": app.version,
+                    "description": "Error generating full schema"
+                },
+                "paths": {},
+                "error": str(e)
+            }
     
         # Add middleware in correct order (LIFO)
     origins = settings.get_cors_origins()
