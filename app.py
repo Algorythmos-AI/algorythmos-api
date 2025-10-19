@@ -677,14 +677,14 @@ def build_api() -> FastAPI:
             )
             return schema
         except ValueError as e:
+            from core.config import build_error_response
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail={"code": "INVALID_SCHEMA", "message": str(e)}
+                detail=build_error_response("validation_error", str(e))
             )
     
     @app.get(
         "/schemas",
-        response_model=SchemaListResponse,
         tags=["schemas"],
         summary="List extraction schemas",
         description="Retrieve a paginated list of extraction schemas for the current tenant.",
@@ -692,21 +692,26 @@ def build_api() -> FastAPI:
     async def list_schemas(
         request: Request,
         limit: int = Query(default=20, ge=1, le=100, description="Maximum number of items to return"),
-        cursor: Optional[str] = Query(default=None, description="Pagination cursor (ISO timestamp)"),
+        offset: int = Query(default=0, ge=0, description="Number of items to skip"),
         tenant_ctx: Dict[str, str] = Depends(require_key),
         session: AsyncSession = Depends(get_session),
-    ) -> SchemaListResponse:
+    ):
         """List extraction schemas."""
+        from core.config import build_pagination_meta
+        
         tenant_id = tenant_ctx["tenant"]
         
-        response = await SchemaService.list_schemas(
+        items, total = await SchemaService.list_schemas(
             session=session,
             tenant_id=tenant_id,
             limit=limit,
-            cursor=cursor,
+            offset=offset,
         )
         
-        return response
+        return {
+            "items": items,
+            "meta": build_pagination_meta(limit, offset, total)
+        }
     
     @app.get(
         "/schemas/{schema_id}",
@@ -722,6 +727,8 @@ def build_api() -> FastAPI:
         session: AsyncSession = Depends(get_session),
     ) -> ExtractionSchema:
         """Get schema by ID."""
+        from core.config import build_error_response
+        
         tenant_id = tenant_ctx["tenant"]
         
         schema = await SchemaService.get_schema(
@@ -733,7 +740,7 @@ def build_api() -> FastAPI:
         if not schema:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail={"code": "SCHEMA_NOT_FOUND", "message": f"Schema '{schema_id}' not found"}
+                detail=build_error_response("resource_not_found", f"Schema '{schema_id}' not found")
             )
         
         return schema
@@ -753,6 +760,8 @@ def build_api() -> FastAPI:
         session: AsyncSession = Depends(get_session),
     ) -> ExtractionSchema:
         """Update an existing schema."""
+        from core.config import build_error_response
+        
         tenant_id = tenant_ctx["tenant"]
         
         try:
@@ -766,7 +775,7 @@ def build_api() -> FastAPI:
             if not schema:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
-                    detail={"code": "SCHEMA_NOT_FOUND", "message": f"Schema '{schema_id}' not found"}
+                    detail=build_error_response("resource_not_found", f"Schema '{schema_id}' not found")
                 )
             
             logger.info(
@@ -784,7 +793,7 @@ def build_api() -> FastAPI:
         except ValueError as e:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail={"code": "INVALID_SCHEMA", "message": str(e)}
+                detail=build_error_response("validation_error", str(e))
             )
     
     @app.delete(
@@ -801,6 +810,8 @@ def build_api() -> FastAPI:
         session: AsyncSession = Depends(get_session),
     ) -> Response:
         """Delete a schema."""
+        from core.config import build_error_response
+        
         tenant_id = tenant_ctx["tenant"]
         
         deleted = await SchemaService.delete_schema(
@@ -812,7 +823,7 @@ def build_api() -> FastAPI:
         if not deleted:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail={"code": "SCHEMA_NOT_FOUND", "message": f"Schema '{schema_id}' not found"}
+                detail=build_error_response("resource_not_found", f"Schema '{schema_id}' not found")
             )
         
         logger.info(
