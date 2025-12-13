@@ -7,6 +7,7 @@ circular import issues in serverless environments like Vercel.
 from __future__ import annotations
 
 import os
+from typing import AsyncGenerator
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
@@ -23,7 +24,12 @@ engine = create_async_engine(DATABASE_URL, echo=False, future=True)
 async_session_factory = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
 
 
-async def get_session() -> AsyncSession:
-    """Async context manager for database sessions."""
+async def get_session() -> AsyncGenerator[AsyncSession, None]:
+    """Async generator for database sessions.
+    
+    Uses AsyncGenerator type to avoid Pydantic schema generation issues
+    with SQLAlchemy's internal types like _AsyncSessionBind.
+    """
     async with async_session_factory() as session:
         yield session
+
