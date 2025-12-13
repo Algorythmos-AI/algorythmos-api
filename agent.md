@@ -6,6 +6,40 @@
 - All routes must be defined in or imported into `api/index.py`.
 - Critical: Keep bundle size < 250 MB (Vercel limit).
 
+## 🚨 CRITICAL: FastAPI + SQLAlchemy OpenAPI Safety Rule
+
+**THIS IS A HARD CONSTRAINT — VIOLATING IT BREAKS PRODUCTION**
+
+### The Rule
+**Route handler parameters using `Depends(get_session)` MUST NOT have type annotations for SQLAlchemy session types.**
+
+### ❌ NEVER DO THIS
+```python
+async def handler(db: AsyncSession = Depends(get_session)):  # ❌ BREAKS OPENAPI
+async def handler(session: AsyncSession = Depends(get_session)):  # ❌ BREAKS OPENAPI
+async def handler(db: Optional[AsyncSession] = Depends(get_session)):  # ❌ BREAKS OPENAPI
+```
+
+### ✅ ALWAYS DO THIS
+```python
+async def handler(db = Depends(get_session)):  # ✅ CORRECT
+async def handler(session = Depends(get_session)):  # ✅ CORRECT
+```
+
+### Why This Matters
+- Pydantic v2 introspects type annotations during OpenAPI schema generation
+- SQLAlchemy's `AsyncSession` has internal types (`_AsyncSessionBind`) that Pydantic cannot resolve
+- This causes `/openapi.json` to return 500 and `/docs` to fail
+- **This only fails on Vercel** (not locally) due to different introspection behavior
+- December 2025: Production outage occurred due to this exact issue
+
+### Enforcement
+- A regression test (`tests/test_no_asyncsession_in_routes.py`) will fail if this rule is violated
+- Pre-commit hook blocks commits containing the forbidden pattern
+- Runtime behavior is identical with or without the annotation
+
+---
+
 ## Runtime & Deployment Rules (MUST FOLLOW)
 - Vercel uses **Python 3.12** exclusively for serverless functions.
 - **NEVER** specify `"runtime": "python3.11"` or any Python version in vercel.json or elsewhere — it causes build failure: "Function Runtimes must have a valid version".
@@ -52,12 +86,15 @@ Include test output summary in PR description.
 - 500 FUNCTION_INVOCATION_FAILED → usually import or missing dep.
 - Bundle too large → use excludeFiles above.
 - Proxy blocking pip → pin exact versions in requirements.txt.
+- **OpenAPI 500 on Vercel** → Check for AsyncSession type annotations (see critical rule above).
 
 ## AI Agent Instructions
 - Always test changes on Python 3.12.12 before PR.
 - Never add runtime specification.
 - Prioritize small, focused PRs.
 - Update tests for any route/logic changes.
+- **NEVER add AsyncSession type annotations to route handlers** (see critical rule above).
 - Keep this agent.md up to date.
 
 Last updated: December 13, 2025
+

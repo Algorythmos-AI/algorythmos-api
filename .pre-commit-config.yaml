@@ -29,3 +29,14 @@ repos:
       - id: ruff
         args: [--fix, --exit-non-zero-on-fix]
       - id: ruff-format
+
+  # CRITICAL: Prevent AsyncSession type annotations in route handlers
+  # This caused a production outage on Vercel (OpenAPI 500 error)
+  - repo: local
+    hooks:
+      - id: no-asyncsession-in-routes
+        name: Block AsyncSession type annotations in routes
+        entry: bash -c 'if grep -rn "AsyncSession\s*=\s*Depends\|: AsyncSession\s*=" --include="*.py" app.py api/ 2>/dev/null; then echo "❌ FORBIDDEN: AsyncSession type annotations found in route handlers. Use db = Depends(get_session) without type annotation."; exit 1; fi'
+        language: system
+        files: \.py$
+        pass_filenames: false
