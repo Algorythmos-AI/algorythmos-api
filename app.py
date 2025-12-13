@@ -751,24 +751,26 @@ def build_api() -> FastAPI:
                 "error": str(e)
             }
     
-    # Add middleware in correct order (LIFO)
+    # Add middleware in correct order (LIFO - last added runs first)
+    # CORS must be added LAST so it runs FIRST and wraps all responses
+    
+    # Production middlewares (added first, run after CORS)
+    app.add_middleware(RateLimitMiddleware, requests_per_minute=60, requests_per_hour=1000)
+    app.add_middleware(IdempotencyMiddleware, ttl_seconds=86400)  # 24 hours
+    app.add_middleware(MetricsMiddleware)
+    app.add_middleware(FileSizeMiddleware)
+    app.add_middleware(RequestContextMiddleware)
+    
+    # CORS middleware added LAST so it runs FIRST (outermost wrapper)
     origins = settings.get_cors_origins()
     app.add_middleware(
         CORSMiddleware,
         allow_origins=origins,
         allow_credentials=True,
         allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-        allow_headers=["Authorization", "Content-Type", "Idempotency-Key", "X-Request-ID", "*"],
-        expose_headers=["X-Request-ID"],  # So the browser can read it for debugging
+        allow_headers=["Authorization", "Content-Type", "Idempotency-Key", "X-Request-ID", "X-API-Key", "X-Tenant-Id", "*"],
+        expose_headers=["X-Request-ID"],
     )
-    
-    # Production middlewares
-    app.add_middleware(RateLimitMiddleware, requests_per_minute=60, requests_per_hour=1000)
-    app.add_middleware(IdempotencyMiddleware, ttl_seconds=86400)  # 24 hours
-    
-    app.add_middleware(MetricsMiddleware)
-    app.add_middleware(FileSizeMiddleware)
-    app.add_middleware(RequestContextMiddleware)
     
     # Global router instance and logger
     global router_engine
