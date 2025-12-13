@@ -27,6 +27,7 @@ app.version = "0.1.0"
 app.docs_url = "/docs"
 app.redoc_url = "/redoc"
 app.openapi_url = "/openapi.json"
+app = FastAPI()
 
 
 @app.get("/")
@@ -49,5 +50,7 @@ def custom_openapi():
 
 
 app.openapi = custom_openapi
+# Expose existing application routes
+app.mount("/", root_app)
 
 __all__ = ["app"]
