@@ -707,6 +707,11 @@ def build_api() -> FastAPI:
         swagger_ui_parameters={"tryItOutEnabled": True},
         generate_unique_id_function=lambda route: f"{route.tags[0]}-{route.name}" if route.tags else route.name,
     )
+
+    @app.get("/", tags=["health"], summary="Health check", include_in_schema=False)
+    async def health() -> dict[str, str]:
+        """Lightweight health check for serverless environments."""
+        return {"status": "ok"}
     
     # Custom OpenAPI schema with error handling
     @app.get("/openapi.json", include_in_schema=False)
