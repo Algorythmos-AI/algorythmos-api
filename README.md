@@ -429,6 +429,36 @@ make clean          # Clean build artifacts
 make deploy-check   # Verify deployment readiness
 ```
 
+---
+
+### ⚠️ Engineering Notes: OpenAPI + SQLAlchemy on Vercel
+
+> **Critical**: This project runs on Vercel and is subject to a known Pydantic v2 + SQLAlchemy incompatibility that breaks OpenAPI schema generation.
+
+**Problem**: If you add SQLAlchemy session type annotations to FastAPI route handlers, the `/docs` page will fail with a 500 error on Vercel, while working perfectly fine locally.
+
+```python
+# ❌ NEVER DO THIS — Breaks OpenAPI on Vercel
+async def handler(db: AsyncSession = Depends(get_session)):
+
+# ✅ ALWAYS DO THIS — Works everywhere
+async def handler(db = Depends(get_session)):
+```
+
+**Why it happens**:
+- Pydantic v2 introspects type annotations during OpenAPI schema generation
+- SQLAlchemy's `AsyncSession` has internal types (`_AsyncSessionBind`) that Pydantic cannot resolve
+- Vercel's bundled runtime triggers this introspection more aggressively than local Python
+
+**Enforcement**:
+- A regression test (`tests/test_no_asyncsession_in_routes.py`) will fail if this rule is violated
+- A pre-commit hook blocks commits containing the forbidden pattern
+- Runtime behavior is identical with or without the annotation
+
+See `agent.md` for full details.
+
+---
+
 ## 🚀 Deployment
 
 ### 📋 Production Checklist
