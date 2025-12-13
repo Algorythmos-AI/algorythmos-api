@@ -780,6 +780,53 @@ def build_api() -> FastAPI:
     async def healthz() -> dict[str, str]:
         """Health check endpoint."""
         return {"status": "ok"}
+    
+    # Debug OpenAPI endpoint (temporary - to diagnose Vercel 500 error)
+    @app.get("/debug/openapi", tags=["health"])
+    async def debug_openapi() -> dict:
+        """Debug OpenAPI schema generation - helps diagnose schema errors."""
+        import traceback
+        result = {"status": "checking"}
+        
+        try:
+            # Step 1: Check if we can access routes
+            result["routes_count"] = len(app.routes)
+            
+            # Step 2: Try to import get_openapi
+            try:
+                from fastapi.openapi.utils import get_openapi
+                result["get_openapi_import"] = "ok"
+            except Exception as e:
+                result["get_openapi_import"] = f"failed: {e}"
+                return result
+            
+            # Step 3: Try to generate schema
+            try:
+                schema = get_openapi(
+                    title=app.title,
+                    version=app.version,
+                    description=app.description,
+                    routes=app.routes,
+                )
+                result["schema_generation"] = "ok"
+                result["paths_count"] = len(schema.get("paths", {}))
+                result["title"] = schema.get("info", {}).get("title")
+            except Exception as e:
+                result["schema_generation"] = "failed"
+                result["error"] = str(e)
+                result["error_type"] = type(e).__name__
+                result["traceback"] = traceback.format_exc()
+                return result
+            
+            result["status"] = "success"
+            
+        except Exception as e:
+            result["status"] = "error"
+            result["error"] = str(e)
+            result["error_type"] = type(e).__name__
+            result["traceback"] = traceback.format_exc()
+        
+        return result
 
     # Version endpoint (public) 
     @app.get("/version", tags=["health"])
