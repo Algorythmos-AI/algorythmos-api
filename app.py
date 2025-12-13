@@ -780,53 +780,6 @@ def build_api() -> FastAPI:
     async def healthz() -> dict[str, str]:
         """Health check endpoint."""
         return {"status": "ok"}
-    
-    # Debug OpenAPI endpoint (temporary - to diagnose Vercel 500 error)
-    @app.get("/debug/openapi", tags=["health"])
-    async def debug_openapi() -> dict:
-        """Debug OpenAPI schema generation - helps diagnose schema errors."""
-        import traceback
-        result = {"status": "checking"}
-        
-        try:
-            # Step 1: Check if we can access routes
-            result["routes_count"] = len(app.routes)
-            
-            # Step 2: Try to import get_openapi
-            try:
-                from fastapi.openapi.utils import get_openapi
-                result["get_openapi_import"] = "ok"
-            except Exception as e:
-                result["get_openapi_import"] = f"failed: {e}"
-                return result
-            
-            # Step 3: Try to generate schema
-            try:
-                schema = get_openapi(
-                    title=app.title,
-                    version=app.version,
-                    description=app.description,
-                    routes=app.routes,
-                )
-                result["schema_generation"] = "ok"
-                result["paths_count"] = len(schema.get("paths", {}))
-                result["title"] = schema.get("info", {}).get("title")
-            except Exception as e:
-                result["schema_generation"] = "failed"
-                result["error"] = str(e)
-                result["error_type"] = type(e).__name__
-                result["traceback"] = traceback.format_exc()
-                return result
-            
-            result["status"] = "success"
-            
-        except Exception as e:
-            result["status"] = "error"
-            result["error"] = str(e)
-            result["error_type"] = type(e).__name__
-            result["traceback"] = traceback.format_exc()
-        
-        return result
 
     # Version endpoint (public) 
     @app.get("/version", tags=["health"])
@@ -885,7 +838,7 @@ def build_api() -> FastAPI:
         request: Request,
         payload: CreateSchemaRequest = Body(..., description="Schema configuration"),
         tenant_ctx: Dict[str, str] = Depends(require_key),
-        session: AsyncSession = Depends(get_session),
+        session = Depends(get_session),
     ) -> ExtractionSchema:
         """Create a new extraction schema."""
         tenant_id = tenant_ctx["tenant"]
@@ -926,7 +879,7 @@ def build_api() -> FastAPI:
         limit: int = Query(default=20, ge=1, le=100, description="Maximum number of items to return"),
         offset: int = Query(default=0, ge=0, description="Number of items to skip"),
         tenant_ctx: Dict[str, str] = Depends(require_key),
-        session: AsyncSession = Depends(get_session),
+        session = Depends(get_session),
     ):
         """List extraction schemas."""
         from core.config import build_pagination_meta
@@ -956,7 +909,7 @@ def build_api() -> FastAPI:
         request: Request,
         schema_id: str,
         tenant_ctx: Dict[str, str] = Depends(require_key),
-        session: AsyncSession = Depends(get_session),
+        session = Depends(get_session),
     ) -> ExtractionSchema:
         """Get schema by ID."""
         from core.config import build_error_response
@@ -989,7 +942,7 @@ def build_api() -> FastAPI:
         schema_id: str,
         payload: UpdateSchemaRequest = Body(..., description="Schema updates"),
         tenant_ctx: Dict[str, str] = Depends(require_key),
-        session: AsyncSession = Depends(get_session),
+        session = Depends(get_session),
     ) -> ExtractionSchema:
         """Update an existing schema."""
         from core.config import build_error_response
@@ -1039,7 +992,7 @@ def build_api() -> FastAPI:
         request: Request,
         schema_id: str,
         tenant_ctx: Dict[str, str] = Depends(require_key),
-        session: AsyncSession = Depends(get_session),
+        session = Depends(get_session),
     ) -> Response:
         """Delete a schema."""
         from core.config import build_error_response
@@ -1083,7 +1036,7 @@ def build_api() -> FastAPI:
         request: Request,
         payload: CreateExtractorRequest = Body(...),
         tenant_ctx: Dict[str, str] = Depends(require_key),
-        session: AsyncSession = Depends(get_session),
+        session = Depends(get_session),
     ) -> ExtractorConfig:
         """Create a new extractor."""
         tenant_id = tenant_ctx["tenant"]
@@ -1125,7 +1078,7 @@ def build_api() -> FastAPI:
         schema_id: Optional[str] = Query(None, description="Filter by schema ID"),
         enabled: Optional[bool] = Query(None, description="Filter by enabled status"),
         tenant_ctx: Dict[str, str] = Depends(require_key),
-        session: AsyncSession = Depends(get_session),
+        session = Depends(get_session),
     ):
         """List extractors for the tenant."""
         from core.config import build_pagination_meta
@@ -1157,7 +1110,7 @@ def build_api() -> FastAPI:
         request: Request,
         extractor_id: str = PathParam(..., description="Extractor ID"),
         tenant_ctx: Dict[str, str] = Depends(require_key),
-        session: AsyncSession = Depends(get_session),
+        session = Depends(get_session),
     ) -> ExtractorConfig:
         """Get an extractor by ID."""
         tenant_id = tenant_ctx["tenant"]
@@ -1188,7 +1141,7 @@ def build_api() -> FastAPI:
         extractor_id: str = PathParam(..., description="Extractor ID"),
         payload: UpdateExtractorRequest = Body(...),
         tenant_ctx: Dict[str, str] = Depends(require_key),
-        session: AsyncSession = Depends(get_session),
+        session = Depends(get_session),
     ) -> ExtractorConfig:
         """Update an extractor."""
         tenant_id = tenant_ctx["tenant"]
@@ -1230,7 +1183,7 @@ def build_api() -> FastAPI:
         request: Request,
         extractor_id: str = PathParam(..., description="Extractor ID"),
         tenant_ctx: Dict[str, str] = Depends(require_key),
-        session: AsyncSession = Depends(get_session),
+        session = Depends(get_session),
     ):
         """Delete an extractor."""
         tenant_id = tenant_ctx["tenant"]
@@ -1272,7 +1225,7 @@ def build_api() -> FastAPI:
         request: Request,
         payload: CreateClassifierRequest = Body(...),
         tenant_ctx: Dict[str, str] = Depends(require_key),
-        session: AsyncSession = Depends(get_session),
+        session = Depends(get_session),
     ) -> ClassifierConfig:
         """Create a new classifier."""
         tenant_id = tenant_ctx["tenant"]
@@ -1312,7 +1265,7 @@ def build_api() -> FastAPI:
         offset: int = Query(0, ge=0, description="Number of items to skip"),
         enabled: Optional[bool] = Query(None, description="Filter by enabled status"),
         tenant_ctx: Dict[str, str] = Depends(require_key),
-        session: AsyncSession = Depends(get_session),
+        session = Depends(get_session),
     ):
         """List classifiers for the tenant."""
         from core.config import build_pagination_meta
@@ -1343,7 +1296,7 @@ def build_api() -> FastAPI:
         request: Request,
         classifier_id: str = PathParam(..., description="Classifier ID"),
         tenant_ctx: Dict[str, str] = Depends(require_key),
-        session: AsyncSession = Depends(get_session),
+        session = Depends(get_session),
     ) -> ClassifierConfig:
         """Get a classifier by ID."""
         tenant_id = tenant_ctx["tenant"]
@@ -1374,7 +1327,7 @@ def build_api() -> FastAPI:
         classifier_id: str = PathParam(..., description="Classifier ID"),
         payload: UpdateClassifierRequest = Body(...),
         tenant_ctx: Dict[str, str] = Depends(require_key),
-        session: AsyncSession = Depends(get_session),
+        session = Depends(get_session),
     ) -> ClassifierConfig:
         """Update a classifier."""
         tenant_id = tenant_ctx["tenant"]
@@ -1416,7 +1369,7 @@ def build_api() -> FastAPI:
         request: Request,
         classifier_id: str = PathParam(..., description="Classifier ID"),
         tenant_ctx: Dict[str, str] = Depends(require_key),
-        session: AsyncSession = Depends(get_session),
+        session = Depends(get_session),
     ):
         """Delete a classifier."""
         tenant_id = tenant_ctx["tenant"]
@@ -1458,7 +1411,7 @@ def build_api() -> FastAPI:
         request: Request,
         payload: CreateSplitterRequest = Body(...),
         tenant_ctx: Dict[str, str] = Depends(require_key),
-        session: AsyncSession = Depends(get_session),
+        session = Depends(get_session),
     ) -> SplitterConfig:
         """Create a new splitter."""
         tenant_id = tenant_ctx["tenant"]
@@ -1498,7 +1451,7 @@ def build_api() -> FastAPI:
         offset: int = Query(0, ge=0, description="Number of items to skip"),
         enabled: Optional[bool] = Query(None, description="Filter by enabled status"),
         tenant_ctx: Dict[str, str] = Depends(require_key),
-        session: AsyncSession = Depends(get_session),
+        session = Depends(get_session),
     ):
         """List splitters for the tenant."""
         from core.config import build_pagination_meta
@@ -1529,7 +1482,7 @@ def build_api() -> FastAPI:
         request: Request,
         splitter_id: str = PathParam(..., description="Splitter ID"),
         tenant_ctx: Dict[str, str] = Depends(require_key),
-        session: AsyncSession = Depends(get_session),
+        session = Depends(get_session),
     ) -> SplitterConfig:
         """Get a splitter by ID."""
         tenant_id = tenant_ctx["tenant"]
@@ -1560,7 +1513,7 @@ def build_api() -> FastAPI:
         splitter_id: str = PathParam(..., description="Splitter ID"),
         payload: UpdateSplitterRequest = Body(...),
         tenant_ctx: Dict[str, str] = Depends(require_key),
-        session: AsyncSession = Depends(get_session),
+        session = Depends(get_session),
     ) -> SplitterConfig:
         """Update a splitter."""
         tenant_id = tenant_ctx["tenant"]
@@ -1602,7 +1555,7 @@ def build_api() -> FastAPI:
         request: Request,
         splitter_id: str = PathParam(..., description="Splitter ID"),
         tenant_ctx: Dict[str, str] = Depends(require_key),
-        session: AsyncSession = Depends(get_session),
+        session = Depends(get_session),
     ):
         """Delete a splitter."""
         tenant_id = tenant_ctx["tenant"]
@@ -1645,7 +1598,7 @@ def build_api() -> FastAPI:
         text: str = Body(..., description="Text content to extract from"),
         extractor_id: Optional[str] = Body(None, description="Optional specific extractor configuration to use"),
         tenant_ctx: Dict[str, str] = Depends(require_key),
-        session: AsyncSession = Depends(get_session),
+        session = Depends(get_session),
     ):
         """
         Extract structured fields from text using regex patterns.
@@ -1717,7 +1670,7 @@ def build_api() -> FastAPI:
         text: str = Body(..., description="Text content to classify"),
         classifier_id: Optional[str] = Body(None, description="Optional specific classifier to use"),
         tenant_ctx: Dict[str, str] = Depends(require_key),
-        session: AsyncSession = Depends(get_session),
+        session = Depends(get_session),
     ):
         """
         Classify document text into categories.
@@ -1788,7 +1741,7 @@ def build_api() -> FastAPI:
         text: str = Body(..., description="Text content to split"),
         splitter_id: Optional[str] = Body(None, description="Optional specific splitter to use"),
         tenant_ctx: Dict[str, str] = Depends(require_key),
-        session: AsyncSession = Depends(get_session),
+        session = Depends(get_session),
     ):
         """
         Split document text into chunks.
@@ -2555,7 +2508,7 @@ def build_api() -> FastAPI:
         tenant_ctx: Dict[str, str] = Depends(require_key),
         x_api_version: Optional[str] = Header(default=None, description="API version for compatibility"),
         idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key", description="Idempotency key for duplicate request prevention"),
-        db: AsyncSession = Depends(get_session),
+        db = Depends(get_session),
         files: Optional[List[UploadFile]] = File(None, description="PDF files to process (max 50, max 10MB each)"),
     ) -> Dict[str, Any]:
         """Create a processor run (Algorythmos-style endpoint). 
@@ -2851,7 +2804,7 @@ def build_api() -> FastAPI:
         run_id: str,
         tenant_ctx: Dict[str, str] = Depends(require_key),
         x_api_version: Optional[str] = Header(default=None, description="API version for compatibility"),
-        db: AsyncSession = Depends(get_session),
+        db = Depends(get_session),
     ) -> Dict[str, Any]:
         """Get processor run status and results (Algorythmos-style endpoint)."""
         stmt = select(Run).where(
@@ -2899,7 +2852,7 @@ def build_api() -> FastAPI:
         cursor: Optional[str] = Query(default=None, description="Cursor for pagination (ISO timestamp)"),
         status: Optional[str] = Query(default=None, description="Filter by status (queued, processing, succeeded, failed)"),
         x_api_version: Optional[str] = Header(default=None, description="API version for compatibility"),
-        db: AsyncSession = Depends(get_session),
+        db = Depends(get_session),
     ) -> Dict[str, Any]:
         """List processor runs with pagination (Algorythmos-style endpoint)."""
         tenant_id = tenant_ctx["tenant"]
@@ -3034,7 +2987,7 @@ def build_api() -> FastAPI:
         x_vendor_signature: Optional[str] = Header(default=None, alias="X-Vendor-Signature", description="HMAC SHA-256 signature of request body"),
         x_vendor_event_id: Optional[str] = Header(default=None, alias="X-Vendor-Event-ID", description="Unique event identifier for deduplication"),
         x_vendor_timestamp: Optional[str] = Header(default=None, alias="X-Vendor-Timestamp", description="Unix timestamp of webhook event"),
-        db: AsyncSession = Depends(get_session),
+        db = Depends(get_session),
     ) -> Response:
         """Receive webhook notifications from vendor service."""
         # Validate content type
@@ -3173,7 +3126,7 @@ def build_api() -> FastAPI:
     async def create_processor_endpoint(
         request: CreateProcessorRequest,
         tenant_ctx: dict = Depends(require_key),
-        db: AsyncSession = Depends(get_session),
+        db = Depends(get_session),
     ):
         """Create a new processor."""
         try:
@@ -3230,7 +3183,7 @@ def build_api() -> FastAPI:
         processor_type: Optional[str] = Query(None),
         enabled: Optional[bool] = Query(None),
         tenant_ctx: dict = Depends(require_key),
-        db: AsyncSession = Depends(get_session),
+        db = Depends(get_session),
     ):
         """List processors with pagination."""
         try:
@@ -3283,7 +3236,7 @@ def build_api() -> FastAPI:
     async def get_processor_endpoint(
         processor_id: str = PathParam(...),
         tenant_ctx: dict = Depends(require_key),
-        db: AsyncSession = Depends(get_session),
+        db = Depends(get_session),
     ):
         """Get processor by ID."""
         try:
@@ -3332,7 +3285,7 @@ def build_api() -> FastAPI:
         processor_id: str = PathParam(...),
         request: UpdateProcessorRequest = None,
         tenant_ctx: dict = Depends(require_key),
-        db: AsyncSession = Depends(get_session),
+        db = Depends(get_session),
     ):
         """Update processor."""
         try:
@@ -3393,7 +3346,7 @@ def build_api() -> FastAPI:
     async def delete_processor_endpoint(
         processor_id: str = PathParam(...),
         tenant_ctx: dict = Depends(require_key),
-        db: AsyncSession = Depends(get_session),
+        db = Depends(get_session),
     ):
         """Delete processor."""
         try:
@@ -3429,7 +3382,7 @@ def build_api() -> FastAPI:
     async def create_workflow_endpoint(
         request: CreateWorkflowRequest,
         tenant_ctx: dict = Depends(require_key),
-        db: AsyncSession = Depends(get_session),
+        db = Depends(get_session),
     ):
         """Create a new workflow."""
         try:
@@ -3479,7 +3432,7 @@ def build_api() -> FastAPI:
         offset: int = Query(0, ge=0),
         enabled: Optional[bool] = Query(None),
         tenant_ctx: dict = Depends(require_key),
-        db: AsyncSession = Depends(get_session),
+        db = Depends(get_session),
     ):
         """List workflows with pagination."""
         try:
@@ -3528,7 +3481,7 @@ def build_api() -> FastAPI:
     async def get_workflow_endpoint(
         workflow_id: str = PathParam(...),
         tenant_ctx: dict = Depends(require_key),
-        db: AsyncSession = Depends(get_session),
+        db = Depends(get_session),
     ):
         """Get workflow by ID."""
         try:
@@ -3574,7 +3527,7 @@ def build_api() -> FastAPI:
         workflow_id: str = PathParam(...),
         request: UpdateWorkflowRequest = None,
         tenant_ctx: dict = Depends(require_key),
-        db: AsyncSession = Depends(get_session),
+        db = Depends(get_session),
     ):
         """Update workflow."""
         try:
@@ -3629,7 +3582,7 @@ def build_api() -> FastAPI:
     async def delete_workflow_endpoint(
         workflow_id: str = PathParam(...),
         tenant_ctx: dict = Depends(require_key),
-        db: AsyncSession = Depends(get_session),
+        db = Depends(get_session),
     ):
         """Delete workflow."""
         try:
@@ -3664,7 +3617,7 @@ def build_api() -> FastAPI:
         workflow_id: str = PathParam(...),
         request: ExecuteWorkflowRequest = None,
         tenant_ctx: dict = Depends(require_key),
-        db: AsyncSession = Depends(get_session),
+        db = Depends(get_session),
     ):
         """Execute workflow."""
         try:
@@ -3700,7 +3653,7 @@ def build_api() -> FastAPI:
     async def create_evaluation_set_endpoint(
         request: CreateEvaluationSetRequest,
         tenant_ctx: dict = Depends(require_key),
-        db: AsyncSession = Depends(get_session),
+        db = Depends(get_session),
     ):
         """Create a new evaluation set."""
         try:
@@ -3752,7 +3705,7 @@ def build_api() -> FastAPI:
         target_type: Optional[str] = Query(None),
         target_id: Optional[str] = Query(None),
         tenant_ctx: dict = Depends(require_key),
-        db: AsyncSession = Depends(get_session),
+        db = Depends(get_session),
     ):
         """List evaluation sets with pagination."""
         try:
@@ -3802,7 +3755,7 @@ def build_api() -> FastAPI:
     async def get_evaluation_set_endpoint(
         evaluation_set_id: str = PathParam(...),
         tenant_ctx: dict = Depends(require_key),
-        db: AsyncSession = Depends(get_session),
+        db = Depends(get_session),
     ):
         """Get evaluation set by ID."""
         try:
@@ -3848,7 +3801,7 @@ def build_api() -> FastAPI:
         evaluation_set_id: str = PathParam(...),
         request: UpdateEvaluationSetRequest = None,
         tenant_ctx: dict = Depends(require_key),
-        db: AsyncSession = Depends(get_session),
+        db = Depends(get_session),
     ):
         """Update evaluation set."""
         try:
@@ -3904,7 +3857,7 @@ def build_api() -> FastAPI:
     async def delete_evaluation_set_endpoint(
         evaluation_set_id: str = PathParam(...),
         tenant_ctx: dict = Depends(require_key),
-        db: AsyncSession = Depends(get_session),
+        db = Depends(get_session),
     ):
         """Delete evaluation set."""
         try:
@@ -3938,7 +3891,7 @@ def build_api() -> FastAPI:
     async def run_evaluation_endpoint(
         evaluation_set_id: str = PathParam(...),
         tenant_ctx: dict = Depends(require_key),
-        db: AsyncSession = Depends(get_session),
+        db = Depends(get_session),
     ):
         """Run evaluation."""
         try:
