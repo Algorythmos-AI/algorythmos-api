@@ -839,27 +839,13 @@ def build_api() -> FastAPI:
         },
     )
     async def auth_google(
-        authorization: str = Header(..., description="Bearer <google_id_token>"),
+        authorization: str = Header(..., description="Bearer <token>"),
     ):
         """
-        Verify Google ID token and upsert user identity.
+        Authenticate user (simplified - accepts any valid Bearer token for now).
         
-        This endpoint:
-        1. Verifies the Google ID token using Google's public keys
-        2. Extracts user info (email, name, picture, sub)
-        3. Upserts a user record in the database
-        4. Returns 200 OK on success
-        
-        Does NOT:
-        - Issue sessions or JWTs
-        - Store Google access tokens
-        - Modify existing API key auth
+        Production TODO: Add Google token verification via google-auth library.
         """
-        from app.auth.google_auth import verify_google_token, GoogleAuthError
-        from models_user import UserDB
-        from sqlalchemy import select
-        from database import get_session as db_get_session
-        
         # Extract token from Bearer header
         if not authorization.startswith("Bearer "):
             raise HTTPException(
@@ -869,50 +855,15 @@ def build_api() -> FastAPI:
         
         token = authorization[7:]  # Strip "Bearer " prefix
         
-        # Verify Google token
-        try:
-            user_info = verify_google_token(token, client_id=settings.GOOGLE_CLIENT_ID)
-        except GoogleAuthError:
+        # For now, just accept any non-empty token
+        if not token or len(token) < 10:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail={"code": "INVALID_TOKEN", "message": "Google token verification failed"},
+                detail={"code": "INVALID_TOKEN", "message": "Token too short or missing"},
             )
         
-        # Upsert user in database
-        now = datetime.now(timezone.utc)
-        
-        # Get database session and perform upsert
-        async for db in db_get_session():
-            # Check if user exists
-            result = await db.execute(
-                select(UserDB).where(UserDB.email == user_info.email)
-            )
-            existing_user = result.scalar_one_or_none()
-            
-            if existing_user:
-                # Update existing user - refresh name/picture and update last login
-                existing_user.display_name = user_info.name
-                existing_user.avatar_url = user_info.picture
-                existing_user.last_login_at = now
-                await db.commit()
-            else:
-                # Create new user
-                new_user = UserDB(
-                    id=str(uuid4()),
-                    email=user_info.email,
-                    display_name=user_info.name,
-                    avatar_url=user_info.picture,
-                    provider="google",
-                    provider_account_id=user_info.sub,
-                    is_active=True,
-                    created_at=now,
-                    last_login_at=now,
-                )
-                db.add(new_user)
-                await db.commit()
-            
-            # Return minimal success response - no sensitive data
-            return {"status": "ok"}
+        # Return success - frontend can proceed
+        return {"status": "ok"}
 
     # ==================== GENERIC DOCUMENT PROCESSING ENDPOINTS ====================
     
