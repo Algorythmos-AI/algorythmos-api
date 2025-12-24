@@ -88,6 +88,47 @@ Include test output summary in PR description.
 - Proxy blocking pip → pin exact versions in requirements.txt.
 - **OpenAPI 500 on Vercel** → Check for AsyncSession type annotations (see critical rule above).
 
+---
+
+## Google Authentication (Identity Persistence)
+
+### Endpoint
+`POST /api/auth/google` - Verifies Google ID tokens and persists user identity.
+
+### Architecture
+```
+├── models_user.py           # UserDB model (at root to avoid app package load issues)
+└── app/
+    └── auth/
+        ├── __init__.py      # Auth package exports
+        └── google_auth.py   # Google token verification service
+```
+
+### Key Files
+- **`app/auth/google_auth.py`**: Uses `google-auth` library to verify tokens against Google's public keys
+- **`app/models_user.py`**: Contains `UserDB` model with email as unique identifier
+- **`alembic/versions/20251214_create_users.py`**: Migration for users table
+
+### Configuration
+- `GOOGLE_CLIENT_ID` (optional in dev, recommended in prod): Validates token audience
+
+### Important Notes
+- This is **identity persistence only** — NOT sessions, NOT JWTs, NOT RBAC
+- Uses **Google Identity Services (GIS)** with ID tokens — NOT OAuth redirect flow
+- Uses upsert logic: creates user on first login, updates `last_login_at` on subsequent logins
+- Returns `{"status": "ok"}` on success — no sensitive data in response
+- The `provider` field supports future SSO (SAML/OIDC)
+- **Production safety**: App fails to start if `GOOGLE_CLIENT_ID` is not set when `ENV=prod`
+
+### Modifying Auth
+When adding new authentication providers:
+1. Add new verification service in `app/auth/`
+2. Export in `app/auth/__init__.py`
+3. Add endpoint in `app.py` (under AUTHENTICATION ENDPOINTS section)
+4. Use `provider` field to differentiate (e.g., "saml", "oidc")
+
+---
+
 ## AI Agent Instructions
 - Always test changes on Python 3.12.12 before PR.
 - Never add runtime specification.
@@ -96,5 +137,4 @@ Include test output summary in PR description.
 - **NEVER add AsyncSession type annotations to route handlers** (see critical rule above).
 - Keep this agent.md up to date.
 
-Last updated: December 13, 2025
-
+Last updated: December 25, 2025

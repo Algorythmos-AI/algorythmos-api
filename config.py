@@ -43,6 +43,11 @@ class Settings(BaseSettings):
         default="dev",
         description="Environment (dev/staging/prod)"
     )
+    GOOGLE_CLIENT_ID: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("GOOGLE_CLIENT_ID", "google_client_id"),
+        description="Google OAuth client ID for token audience validation (optional in dev, recommended in prod)"
+    )
     VENDOR_WEBHOOK_SECRET: str | None = Field(
         default=None,
         description="Secret for vendor webhook HMAC verification"
@@ -116,6 +121,12 @@ class Settings(BaseSettings):
         """Validate production environment requirements."""
         if self.ENV == "prod" and not self.ALG_API_KEY:
             raise ValueError("ALG_API_KEY is required in production environment")
+        if self.ENV == "prod" and not self.GOOGLE_CLIENT_ID:
+            raise ValueError(
+                "GOOGLE_CLIENT_ID is required in production environment for secure "
+                "Google token audience validation. Without it, any valid Google token "
+                "would be accepted, bypassing authentication security."
+            )
         return self
     
     def get_cors_origins(self) -> List[str]:
