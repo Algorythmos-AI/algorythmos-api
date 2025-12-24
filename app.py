@@ -825,6 +825,93 @@ def build_api() -> FastAPI:
         """Expose Prometheus metrics."""
         return await metrics_app()()
 
+    # ==================== AUTHENTICATION ENDPOINTS ====================
+    
+    @app.post(
+        "/auth/google",
+        status_code=status.HTTP_200_OK,
+        tags=["auth"],
+        summary="Authenticate with Google",
+        description="Verify Google ID token and persist user identity. This endpoint does NOT issue sessions or JWTs.",
+        responses={
+            200: {"description": "Authentication successful", "content": {"application/json": {"example": {"status": "ok"}}}},
+            401: {"description": "Invalid or expired token"},
+        },
+    )
+    async def auth_google(
+        authorization: str = Header(..., description="Bearer <google_id_token>"),
+        db = Depends(get_session),  # No AsyncSession type annotation per agent.md rules
+    ):
+        """
+        Verify Google ID token and upsert user identity.
+        
+        This endpoint:
+        1. Verifies the Google ID token using Google's public keys
+        2. Extracts user info (email, name, picture, sub)
+        3. Upserts a user record in the database
+        4. Returns 200 OK on success
+        
+        Does NOT:
+        - Issue sessions or JWTs
+        - Store Google access tokens
+        - Modify existing API key auth
+        """
+        from app.auth.google_auth import verify_google_token, GoogleAuthError
+        from models_user import UserDB
+        from sqlalchemy import select
+        
+        # Extract token from Bearer header
+        if not authorization.startswith("Bearer "):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={"code": "INVALID_AUTH_HEADER", "message": "Authorization header must be 'Bearer <token>'"},
+            )
+        
+        token = authorization[7:]  # Strip "Bearer " prefix
+        
+        # Verify Google token
+        try:
+            user_info = verify_google_token(token, client_id=settings.GOOGLE_CLIENT_ID)
+        except GoogleAuthError:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={"code": "INVALID_TOKEN", "message": "Google token verification failed"},
+            )
+        
+        # Upsert user in database
+        now = datetime.now(timezone.utc)
+        
+        # Check if user exists
+        result = await db.execute(
+            select(UserDB).where(UserDB.email == user_info.email)
+        )
+        existing_user = result.scalar_one_or_none()
+        
+        if existing_user:
+            # Update existing user - refresh name/picture and update last login
+            existing_user.display_name = user_info.name
+            existing_user.avatar_url = user_info.picture
+            existing_user.last_login_at = now
+            await db.commit()
+        else:
+            # Create new user
+            new_user = UserDB(
+                id=str(uuid4()),
+                email=user_info.email,
+                display_name=user_info.name,
+                avatar_url=user_info.picture,
+                provider="google",
+                provider_account_id=user_info.sub,
+                is_active=True,
+                created_at=now,
+                last_login_at=now,
+            )
+            db.add(new_user)
+            await db.commit()
+        
+        # Return minimal success response - no sensitive data
+        return {"status": "ok"}
+
     # ==================== GENERIC DOCUMENT PROCESSING ENDPOINTS ====================
     
     # Schema Management Endpoints

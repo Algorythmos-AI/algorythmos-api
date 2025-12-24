@@ -13,11 +13,15 @@ from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 # Add parent directory to path to allow imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from app.database import DATABASE_URL
-from app.models import Base
+# Import directly from root-level database module to avoid triggering
+# the full app module load (which requires config settings like ALG_API_KEY)
+from database import DATABASE_URL, Base
 
 # Import generic document processing models to register them with Base
 from document_processing import models as doc_models
+
+# Import user model to register it with Base
+from models_user import UserDB
 
 config = context.config
 
