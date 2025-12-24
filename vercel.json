@@ -1,6 +1,11 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "installCommand": "pip install -r requirements.txt",
+  "functions": {
+    "api/**/*.py": {
+      "excludeFiles": "{tests/**,__tests__/**,**/*.test.py,**/test_*.py,fixtures/**,__fixtures__/**,testdata/**,sample-data/**,static/**,assets/**,vendor_libs/**}"
+    }
+  },
   "rewrites": [
     {
       "source": "/(.*)",
@@ -8,4 +13,3 @@
     }
   ]
 }
-

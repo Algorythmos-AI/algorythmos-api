@@ -231,6 +231,63 @@ GET  /version                 # ✅ API version
 GET  /metrics                 # ✅ Prometheus metrics
 ```
 
+### 🔐 Google Sign-In (Identity Persistence)
+
+The API supports Google Sign-In for human users via the frontend. This is **identity persistence only** — not a full auth system.
+
+```bash
+# Authenticate with Google ID token (received from frontend after Google Sign-In)
+POST /api/auth/google
+Authorization: Bearer <google_id_token>
+
+# Success Response
+HTTP 200 OK
+{"status": "ok"}
+
+# Error Response (invalid/expired token)
+HTTP 401 Unauthorized
+{"code": "INVALID_TOKEN", "message": "Google token verification failed"}
+```
+
+**How it works:**
+1. Frontend performs Google Sign-In using Google Identity Services (GIS)
+2. Frontend sends the Google ID token to `POST /api/auth/google`
+3. Backend verifies token using Google's public keys
+4. Backend upserts user record (email as unique identifier)
+5. Backend returns `{"status": "ok"}`
+
+> [!IMPORTANT]
+> This uses **Google Identity Services (GIS)** with ID tokens. This is **NOT** OAuth redirect flow.
+> No client secret is used. Only the Client ID is required.
+
+#### 🔧 Google Cloud Console Configuration
+
+1. Go to [Google Cloud Console → Credentials](https://console.cloud.google.com/apis/credentials)
+2. Create a new **OAuth 2.0 Client ID**
+3. Choose **Web application** as the application type
+4. Configure:
+
+| Setting | Value |
+|---------|-------|
+| **Name** | `Algorythmos Web Client` |
+| **Authorized JavaScript origins** | `http://localhost:3000`, `https://app.algorythmos.fr` |
+| **Authorized redirect URIs** | **NOT REQUIRED** (ID token flow, not auth code) |
+
+5. Copy the **Client ID** (the secret is NOT used)
+
+#### Environment Variables
+
+```bash
+# Required in production (app fails to start without it)
+GOOGLE_CLIENT_ID=450613204520-xxxxx.apps.googleusercontent.com
+
+# Client secret is NOT USED (ID token flow only)
+```
+
+> [!CAUTION]
+> In production (`ENV=prod`), the app will **fail to start** if `GOOGLE_CLIENT_ID` is not set.
+> This is a security feature to prevent accepting unauthenticated tokens.
+
 ---
 
 ### 📊 Complete API Examples
@@ -744,6 +801,7 @@ def verify_webhook(payload: bytes, signature: str, secret: str) -> bool:
 |----------|---------|-------------|
 | `ALG_API_KEY` | *required* | API authentication key |
 | `DATABASE_URL` | `sqlite+aiosqlite:///./data/app.db` | Database connection string |
+| `GOOGLE_CLIENT_ID` | *optional* | Google OAuth client ID for token audience validation |
 | `VENDOR_WEBHOOK_SECRET` | *required* | Secret for webhook HMAC signatures |
 | `CORS_ORIGINS` | `https://app.algorythmos.fr` | Allowed CORS origins |
 | `LOG_LEVEL` | `INFO` | Logging level (DEBUG, INFO, WARNING, ERROR) |
