@@ -19,7 +19,7 @@ import secrets
 from fastapi import BackgroundTasks, Depends, FastAPI, File, Header, HTTPException, Request, Response, UploadFile, status, Path as PathParam, Query, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.params import Body, Query
-from pydantic import AnyHttpUrl, BaseModel, ConfigDict
+from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from config import settings
@@ -872,7 +872,7 @@ def build_api() -> FastAPI:
     # Pydantic models for API key endpoints
     class CreateApiKeyRequest(BaseModel):
         """Request to create a new API key."""
-        name: str = Body(..., min_length=1, max_length=100, description="Name for the API key")
+        name: str = Field(..., min_length=1, max_length=100, description="Name for the API key")
     
     class ApiKeyResponse(BaseModel):
         """API key info returned in list responses (no raw key)."""
