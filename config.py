@@ -35,7 +35,7 @@ class Settings(BaseSettings):
         description="Base API URL"
     )
     CORS_ORIGINS: str = Field(
-        default="http://localhost:3000,https://ui-algorythmos.vercel.app",
+        default="http://localhost:3000,https://ui-algorythmos.vercel.app,https://app.algorythmos.com,https://app.algorythmos.fr",
         validation_alias=AliasChoices("CORS_ORIGINS", "cors_origins"),
         description="CORS allowed origins (comma-separated)"
     )
