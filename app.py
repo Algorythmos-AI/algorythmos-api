@@ -13,7 +13,9 @@ from typing import Any, Dict, List, Literal, Optional
 from uuid import uuid4
 
 import anyio
+import hashlib
 import httpx
+import secrets
 from fastapi import BackgroundTasks, Depends, FastAPI, File, Header, HTTPException, Request, Response, UploadFile, status, Path as PathParam, Query, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.params import Body, Query
@@ -865,6 +867,356 @@ def build_api() -> FastAPI:
         # Return success - frontend can proceed
         return {"status": "ok"}
 
+    # ==================== API KEY MANAGEMENT ENDPOINTS ====================
+    
+    # Pydantic models for API key endpoints
+    class CreateApiKeyRequest(BaseModel):
+        """Request to create a new API key."""
+        name: str = Body(..., min_length=1, max_length=100, description="Name for the API key")
+    
+    class ApiKeyResponse(BaseModel):
+        """API key info returned in list responses (no raw key)."""
+        id: str
+        name: str
+        prefix: str
+        created_at: datetime
+        last_used_at: Optional[datetime] = None
+    
+    class CreateApiKeyResponse(BaseModel):
+        """Response when creating a new API key (includes raw key once)."""
+        id: str
+        name: str
+        prefix: str
+        created_at: datetime
+        raw_key: str  # Only returned on creation!
+    
+    # Constants for API keys
+    API_KEY_PREFIX = "alg_"
+    MAX_KEYS_PER_USER = 10
+    
+    def generate_api_key() -> tuple[str, str, str]:
+        """
+        Generate a new API key.
+        
+        Returns:
+            Tuple of (raw_key, key_hash, prefix)
+        """
+        # Generate 32 random URL-safe characters
+        random_part = secrets.token_urlsafe(32)
+        raw_key = f"{API_KEY_PREFIX}{random_part}"
+        
+        # Hash the key with SHA-256
+        key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
+        
+        # Prefix for display (alg_ + first 8 chars of random part)
+        prefix = f"{API_KEY_PREFIX}{random_part[:8]}"
+        
+        return raw_key, key_hash, prefix
+    
+    def hash_api_key(raw_key: str) -> str:
+        """Hash an API key for lookup."""
+        return hashlib.sha256(raw_key.encode()).hexdigest()
+    
+    async def get_current_user_from_token(
+        authorization: Optional[str],
+        session: AsyncSession,
+    ) -> Optional["UserDB"]:
+        """
+        Verify Google ID token and return the associated user.
+        Returns None if token is invalid or user not found.
+        """
+        if not authorization or not authorization.startswith("Bearer "):
+            return None
+        
+        token = authorization[7:]
+        if not token or len(token) < 10:
+            return None
+        
+        # Import UserDB model
+        from models_user import UserDB
+        
+        # For now, simplified: look up user by a query
+        # In production, verify Google token and extract email/sub
+        # Then look up user by provider_account_id or email
+        
+        # Since we don't have full Google verification here,
+        # we'll need to verify the token using google-auth
+        try:
+            from app.auth.google_auth import verify_google_token
+            user_info = verify_google_token(token)
+            
+            # Find user by email
+            result = await session.execute(
+                select(UserDB).where(
+                    UserDB.email == user_info.email,
+                    UserDB.is_active == True
+                )
+            )
+            user = result.scalar_one_or_none()
+            
+            if not user:
+                # Create user if not exists (first login)
+                user = UserDB(
+                    id=str(uuid4()),
+                    email=user_info.email,
+                    display_name=user_info.name,
+                    avatar_url=user_info.picture,
+                    provider="google",
+                    provider_account_id=user_info.sub,
+                )
+                session.add(user)
+                await session.commit()
+                await session.refresh(user)
+            
+            return user
+        except Exception:
+            return None
+    
+    async def get_user_from_api_key(
+        api_key: str,
+        session: AsyncSession,
+    ) -> Optional["UserDB"]:
+        """
+        Look up user by API key.
+        Updates last_used_at timestamp on successful lookup.
+        """
+        if not api_key or not api_key.startswith(API_KEY_PREFIX):
+            return None
+        
+        from models_api_key import ApiKeyDB
+        from models_user import UserDB
+        
+        key_hash = hash_api_key(api_key)
+        
+        # Find the API key
+        result = await session.execute(
+            select(ApiKeyDB).where(
+                ApiKeyDB.key_hash == key_hash,
+                ApiKeyDB.is_active == True
+            )
+        )
+        api_key_record = result.scalar_one_or_none()
+        
+        if not api_key_record:
+            return None
+        
+        # Update last_used_at
+        api_key_record.last_used_at = datetime.now(timezone.utc)
+        await session.commit()
+        
+        # Get the associated user
+        result = await session.execute(
+            select(UserDB).where(
+                UserDB.id == api_key_record.user_id,
+                UserDB.is_active == True
+            )
+        )
+        return result.scalar_one_or_none()
+    
+    async def require_authenticated_user(
+        request: Request,
+        authorization: Optional[str] = Header(default=None),
+        x_api_key: Optional[str] = Header(default=None, alias="x-api-key"),
+        session: AsyncSession = Depends(get_session),
+    ) -> "UserDB":
+        """
+        Dual authentication dependency.
+        
+        Priority:
+        1. Authorization: Bearer <token> (Google ID token)
+        2. X-API-Key: alg_... (API key)
+        
+        Returns the authenticated User object.
+        Raises 401 if neither method succeeds.
+        """
+        from models_user import UserDB
+        
+        user = None
+        
+        # Try Bearer token first
+        if authorization:
+            user = await get_current_user_from_token(authorization, session)
+        
+        # If no user from token, try API key
+        if not user and x_api_key:
+            user = await get_user_from_api_key(x_api_key, session)
+        
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={"code": "UNAUTHORIZED", "message": "Invalid or missing authentication"},
+            )
+        
+        # Store user in request state for downstream use
+        request.state.user = user
+        request.state.tenant_id = user.email.split("@")[-1] if user.email else "default"
+        
+        return user
+    
+    @app.post(
+        "/auth/keys",
+        response_model=CreateApiKeyResponse,
+        status_code=status.HTTP_201_CREATED,
+        tags=["auth"],
+        summary="Create API key",
+        description="Generate a new API key for programmatic access. The raw key is only shown once!",
+        responses={
+            201: {"description": "API key created successfully"},
+            400: {"description": "Key limit exceeded (max 10 per user)"},
+            401: {"description": "Not authenticated"},
+        },
+    )
+    async def create_api_key(
+        request: Request,
+        payload: CreateApiKeyRequest,
+        user: "UserDB" = Depends(require_authenticated_user),
+        session: AsyncSession = Depends(get_session),
+    ) -> CreateApiKeyResponse:
+        """Create a new API key for the authenticated user."""
+        from models_api_key import ApiKeyDB
+        
+        # Check key limit
+        result = await session.execute(
+            select(func.count(ApiKeyDB.id)).where(
+                ApiKeyDB.user_id == user.id,
+                ApiKeyDB.is_active == True
+            )
+        )
+        key_count = result.scalar() or 0
+        
+        if key_count >= MAX_KEYS_PER_USER:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "code": "KEY_LIMIT_EXCEEDED",
+                    "message": f"Maximum of {MAX_KEYS_PER_USER} API keys per user. Please revoke an existing key first."
+                },
+            )
+        
+        # Generate the key
+        raw_key, key_hash, prefix = generate_api_key()
+        
+        # Create the record
+        api_key = ApiKeyDB(
+            id=str(uuid4()),
+            user_id=user.id,
+            name=payload.name,
+            key_hash=key_hash,
+            prefix=prefix,
+        )
+        session.add(api_key)
+        await session.commit()
+        await session.refresh(api_key)
+        
+        logger.info(
+            "API key created",
+            extra={
+                "context": {
+                    "key_id": api_key.id,
+                    "user_id": user.id,
+                    "key_name": payload.name,
+                    "prefix": prefix,
+                }
+            }
+        )
+        
+        return CreateApiKeyResponse(
+            id=api_key.id,
+            name=api_key.name,
+            prefix=api_key.prefix,
+            created_at=api_key.created_at,
+            raw_key=raw_key,  # Only returned on creation!
+        )
+    
+    @app.get(
+        "/auth/keys",
+        response_model=List[ApiKeyResponse],
+        tags=["auth"],
+        summary="List API keys",
+        description="Retrieve all active API keys for the authenticated user.",
+    )
+    async def list_api_keys(
+        request: Request,
+        user: "UserDB" = Depends(require_authenticated_user),
+        session: AsyncSession = Depends(get_session),
+    ) -> List[ApiKeyResponse]:
+        """List all API keys for the authenticated user."""
+        from models_api_key import ApiKeyDB
+        
+        result = await session.execute(
+            select(ApiKeyDB)
+            .where(
+                ApiKeyDB.user_id == user.id,
+                ApiKeyDB.is_active == True
+            )
+            .order_by(ApiKeyDB.created_at.desc())
+        )
+        keys = result.scalars().all()
+        
+        return [
+            ApiKeyResponse(
+                id=key.id,
+                name=key.name,
+                prefix=key.prefix,
+                created_at=key.created_at,
+                last_used_at=key.last_used_at,
+            )
+            for key in keys
+        ]
+    
+    @app.delete(
+        "/auth/keys/{key_id}",
+        status_code=status.HTTP_204_NO_CONTENT,
+        tags=["auth"],
+        summary="Revoke API key",
+        description="Revoke (soft delete) an API key. This cannot be undone.",
+        responses={
+            204: {"description": "API key revoked successfully"},
+            404: {"description": "API key not found"},
+        },
+    )
+    async def revoke_api_key(
+        request: Request,
+        key_id: str = PathParam(..., description="API key ID to revoke"),
+        user: "UserDB" = Depends(require_authenticated_user),
+        session: AsyncSession = Depends(get_session),
+    ):
+        """Revoke an API key (soft delete)."""
+        from models_api_key import ApiKeyDB
+        
+        result = await session.execute(
+            select(ApiKeyDB).where(
+                ApiKeyDB.id == key_id,
+                ApiKeyDB.user_id == user.id,
+                ApiKeyDB.is_active == True
+            )
+        )
+        api_key = result.scalar_one_or_none()
+        
+        if not api_key:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"code": "NOT_FOUND", "message": "API key not found"},
+            )
+        
+        # Soft delete
+        api_key.is_active = False
+        await session.commit()
+        
+        logger.info(
+            "API key revoked",
+            extra={
+                "context": {
+                    "key_id": key_id,
+                    "user_id": user.id,
+                    "key_name": api_key.name,
+                }
+            }
+        )
+        
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    
     # ==================== GENERIC DOCUMENT PROCESSING ENDPOINTS ====================
     
     # Schema Management Endpoints
