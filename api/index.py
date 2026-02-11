@@ -11,10 +11,10 @@ ROOT_STR = str(ROOT)
 if ROOT_STR not in sys.path:
     sys.path.insert(0, ROOT_STR)
 
-from app import app as root_app
+# Canonical runtime: top-level app.py (re-exported by the app package).
+from app import app as canonical_app
 
-# Expose the main application for Vercel serverless
-# The root_app already has all routes, middleware, and OpenAPI configured
-app = root_app
+# Expose the canonical FastAPI application for Vercel.
+app = canonical_app
 
 __all__ = ["app"]

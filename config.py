@@ -52,6 +52,16 @@ class Settings(BaseSettings):
         default=None,
         description="Secret for vendor webhook HMAC verification"
     )
+    REDIS_URL: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("REDIS_URL", "redis_url"),
+        description="Redis URL used for distributed operational state (rate limiting, queue signalling)"
+    )
+    STATE_BACKEND: str = Field(
+        default="auto",
+        validation_alias=AliasChoices("STATE_BACKEND", "state_backend"),
+        description="Operational state backend strategy: auto|redis|memory"
+    )
     
     # File handling
     MAX_FILE_MB: int = Field(
@@ -90,6 +100,30 @@ class Settings(BaseSettings):
         default=86400,  # 24 hours
         description="Time-to-live for idempotency key cache in seconds"
     )
+    PARSE_WORKER_POLL_INTERVAL_S: float = Field(
+        default=1.0,
+        description="Polling interval for parser async worker in seconds"
+    )
+    PARSE_WORKER_MAX_ATTEMPTS: int = Field(
+        default=5,
+        description="Maximum parser async worker attempts before dead-lettering"
+    )
+    PARSE_WORKER_BASE_DELAY_S: float = Field(
+        default=2.0,
+        description="Base delay for parser async retry backoff in seconds"
+    )
+    PARSE_WORKER_MAX_DELAY_S: float = Field(
+        default=120.0,
+        description="Maximum parser async retry delay in seconds"
+    )
+    PARSE_WORKER_JITTER_S: float = Field(
+        default=1.0,
+        description="Maximum random jitter added to parser async retry delay"
+    )
+    PARSE_WORKER_LOCK_TIMEOUT_S: int = Field(
+        default=300,
+        description="Parser job lock timeout before stale-running reclamation"
+    )
     
     # Vendor retry configuration
     VENDOR_RETRY_MAX_ATTEMPTS: int = Field(
@@ -119,14 +153,31 @@ class Settings(BaseSettings):
     @model_validator(mode='after')
     def validate_production_requirements(self) -> 'Settings':
         """Validate production environment requirements."""
-        if self.ENV == "prod" and not self.ALG_API_KEY:
+        env_normalized = self.ENV.strip().lower()
+
+        if env_normalized in {"prod", "production"} and not self.ALG_API_KEY:
             raise ValueError("ALG_API_KEY is required in production environment")
-        if self.ENV == "prod" and not self.GOOGLE_CLIENT_ID:
+        if env_normalized in {"prod", "production"} and not self.GOOGLE_CLIENT_ID:
             raise ValueError(
                 "GOOGLE_CLIENT_ID is required in production environment for secure "
                 "Google token audience validation. Without it, any valid Google token "
                 "would be accepted, bypassing authentication security."
             )
+        if env_normalized in {"prod", "production"} and not self.REDIS_URL:
+            raise ValueError(
+                "REDIS_URL is required in production environment for distributed "
+                "rate limiting and durable operational controls."
+            )
+        if env_normalized in {"prod", "production"} and self.STATE_BACKEND.strip().lower() == "memory":
+            raise ValueError("STATE_BACKEND=memory is not allowed in production")
+        if self.PARSE_WORKER_MAX_ATTEMPTS < 1:
+            raise ValueError("PARSE_WORKER_MAX_ATTEMPTS must be >= 1")
+        if self.PARSE_WORKER_POLL_INTERVAL_S <= 0:
+            raise ValueError("PARSE_WORKER_POLL_INTERVAL_S must be > 0")
+        if self.PARSE_WORKER_BASE_DELAY_S <= 0 or self.PARSE_WORKER_MAX_DELAY_S <= 0:
+            raise ValueError("PARSE_WORKER retry delays must be > 0")
+        if self.PARSE_WORKER_LOCK_TIMEOUT_S <= 0:
+            raise ValueError("PARSE_WORKER_LOCK_TIMEOUT_S must be > 0")
         return self
     
     def get_cors_origins(self) -> List[str]:

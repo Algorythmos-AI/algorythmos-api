@@ -42,6 +42,17 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 
 ---
 
+## Canonical Runtime
+
+The only deployable ASGI runtime is `app.py` exported `app`.
+
+- Local: `uv run uvicorn app:app --reload`
+- Docker: `uvicorn app:app --host 0.0.0.0 --port 8080`
+- Vercel: `api/index.py` re-exports the same canonical app object
+- `service.py` is a compatibility shim only; do not add routes/auth/business logic there
+
+---
+
 ## Database Setup
 
 ### Option 1: Neon (Recommended for Serverless)
@@ -140,6 +151,10 @@ ENV=production
 # Database
 DATABASE_URL=postgresql+asyncpg://user:pass@host:5432/dbname
 
+# Distributed operational state (required in production)
+REDIS_URL=redis://redis.internal:6379/0
+STATE_BACKEND=redis
+
 # Vendor Service
 VENDOR_BASE_URL=https://vendor.example.com
 VENDOR_API_KEY=vendor-api-key
@@ -156,6 +171,11 @@ RUN_MAX_FILE_BYTES=10485760
 # CORS (optional)
 CORS_ORIGINS=https://app.algorythmos.fr,https://admin.algorythmos.fr
 ```
+
+Operational state policy:
+1. `ENV=production` requires `REDIS_URL`.
+2. `STATE_BACKEND=memory` is forbidden in production.
+3. Idempotency/replay/job state is SQL-backed and must persist across restarts.
 
 ### Generate Secure Secrets
 
@@ -300,6 +320,9 @@ ls alembic/versions/
 
 # Set DATABASE_URL
 export DATABASE_URL="postgresql+asyncpg://user:pass@host:5432/dbname"
+
+# Validate migration graph has exactly one head
+alembic heads
 ```
 
 ### Run Migrations
@@ -312,6 +335,11 @@ alembic upgrade head
 psql $DATABASE_URL -c "\dt"
 # Should show: runs table
 ```
+
+Migration policy:
+1. Apply `alembic upgrade head` before starting or releasing the app.
+2. Never rely on app startup to create/alter tables.
+3. Keep a single Alembic head at all times.
 
 ### Migration Commands
 
@@ -344,11 +372,23 @@ alembic revision --autogenerate -m "Add new column"
 # Create blank migration
 alembic revision -m "Custom migration"
 
+# Merge multiple heads (if branches diverged)
+alembic merge <head1> <head2> -m "merge heads"
+
 # Edit migration file
 vim alembic/versions/<timestamp>_add_new_column.py
 
 # Test migration
 alembic upgrade head
+```
+
+### CI Guardrail (Single Head)
+
+CI enforces exactly one Alembic head via:
+
+```bash
+HEAD_COUNT=$(python -m alembic heads | grep -c "(head)")
+test "$HEAD_COUNT" -eq 1
 ```
 
 ### Migration Best Practices
@@ -357,6 +397,40 @@ alembic upgrade head
 2. **Backup production database** before migrating
 3. **Run migrations during low-traffic** windows
 4. **Have rollback plan** ready
+
+---
+
+## Async Worker Deployment
+
+`/parse/async` only enqueues durable parser jobs. A worker process must run in each environment.
+
+For incident response and queue triage, use `docs/ASYNC_OPERATIONS_RUNBOOK.md`.
+
+### Worker command
+
+```bash
+python scripts/parse_worker.py
+```
+
+One-shot mode for smoke/debug:
+
+```bash
+python scripts/parse_worker.py --once
+```
+
+### Dead-letter replay
+
+Replay one run:
+
+```bash
+python scripts/replay_dead_letter_parser_runs.py --tenant-id <tenant> --run-id <run_id>
+```
+
+Replay a batch:
+
+```bash
+python scripts/replay_dead_letter_parser_runs.py --tenant-id <tenant> --limit 100
+```
 5. **Monitor application** after migration
 
 ### Backup Before Migration

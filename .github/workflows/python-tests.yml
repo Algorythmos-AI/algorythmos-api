@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ['3.11', '3.12']
+        python-version: ['3.11']
     
     steps:
     - name: Checkout code
@@ -33,41 +33,52 @@ jobs:
         source .venv/bin/activate
         uv pip install -r requirements.txt
         uv pip install pytest pytest-cov pytest-asyncio
+
+    - name: Enforce single Alembic head
+      run: |
+        source .venv/bin/activate
+        HEAD_COUNT=$(python -m alembic heads | grep -c "(head)")
+        echo "Alembic head count: ${HEAD_COUNT}"
+        if [ "${HEAD_COUNT}" -ne 1 ]; then
+          echo "Expected exactly 1 Alembic head."
+          python -m alembic heads
+          exit 1
+        fi
     
     - name: Run Sprint 1 tests (Auth + Version Headers)
       run: |
         source .venv/bin/activate
-        python tests/test_sprint1_auth.py || exit 0
+        python tests/test_sprint1_auth.py
     
     - name: Run Sprint 2 tests (Multi-format Files)
       run: |
         source .venv/bin/activate
-        python tests/test_sprint2_formats.py || exit 0
+        python tests/test_sprint2_formats.py
     
     - name: Run Sprint 3 tests (Parse API Parity)
       run: |
         source .venv/bin/activate
-        python tests/test_sprint3_parse.py || exit 0
+        python tests/test_sprint3_parse.py
     
     - name: Run Sprint 4 tests (Processor Versions)
       run: |
         source .venv/bin/activate
-        python tests/test_sprint4_processor_versions.py || exit 0
+        python tests/test_sprint4_processor_versions.py
     
     - name: Run Sprint 5 tests (Processor Runs Citations)
       run: |
         source .venv/bin/activate
-        python tests/test_sprint5_processor_runs.py || exit 0
+        python tests/test_sprint5_processor_runs.py
     
     - name: Run Sprint 6 tests (Workflow Runs + Corrections)
       run: |
         source .venv/bin/activate
-        python tests/test_sprint6_workflow_runs.py || exit 0
+        python tests/test_sprint6_workflow_runs.py
     
     - name: Run Sprint 7 tests (Eval Bulk + Webhook Version)
       run: |
         source .venv/bin/activate
-        PYTHONPATH=/Users/skalaliya/Desktop/api-algorythmos python -c "
+        PYTHONPATH=. python -c "
         print('\n' + '=' * 60)
         print('Sprint 7 Test Suite: Evaluation Items Bulk + Webhook Version')
         print('=' * 60 + '\n')
@@ -79,28 +90,30 @@ jobs:
         item = EvalItemInput(id='test-001', input_data={'type': 'invoice'}, expected_output={'amount': 1000.00})
         assert item.id == 'test-001'
         print('✅ Sprint 7 schemas validated')
-        " || exit 0
+        "
+
+    - name: Run Phase 2 durable state tests
+      run: |
+        source .venv/bin/activate
+        pytest -q tests/test_phase2_distributed_state.py
     
     - name: Security audit with pip-audit
       run: |
         source .venv/bin/activate
         uv pip install pip-audit
-        pip-audit --desc || echo "⚠️  Security vulnerabilities detected - review required"
-      continue-on-error: true
+        pip-audit --desc
     
     - name: Lint with ruff (if available)
       run: |
         source .venv/bin/activate
-        uv pip install ruff || true
-        ruff check . --exit-zero || true
-      continue-on-error: true
+        uv pip install ruff
+        ruff check .
     
     - name: Type check with mypy (if available)
       run: |
         source .venv/bin/activate
-        uv pip install mypy || true
-        mypy --install-types --non-interactive . || true
-      continue-on-error: true
+        uv pip install mypy
+        mypy --install-types --non-interactive .
     
     - name: Generate test report
       run: |
@@ -116,9 +129,53 @@ jobs:
         echo ""
         echo "🎉 8/8 Sprints Complete - 100% Parity Achieved!"
 
+  redis-integration:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.11']
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: Install uv
+      run: |
+        curl -LsSf https://astral.sh/uv/install.sh | sh
+        echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+    - name: Install dependencies
+      run: |
+        uv venv
+        source .venv/bin/activate
+        uv pip install -r requirements.txt
+        uv pip install pytest pytest-asyncio
+
+    - name: Run Redis integration tests
+      env:
+        REDIS_URL: redis://127.0.0.1:6379/0
+      run: |
+        source .venv/bin/activate
+        pytest -q -m integration tests/test_phase2_redis_integration.py
+
   build:
     runs-on: ubuntu-latest
-    needs: test
+    needs: [test, redis-integration]
     
     steps:
     - name: Checkout code
@@ -137,7 +194,41 @@ jobs:
         else
           echo "ℹ️  No Dockerfile found, skipping Docker build"
         fi
-      continue-on-error: true
+
+    - name: Docker smoke test (canonical runtime)
+      run: |
+        if [ ! -f Dockerfile ]; then
+          echo "ℹ️  No Dockerfile found, skipping smoke test"
+          exit 0
+        fi
+
+        docker run -d --name api-algorythmos-smoke \
+          -p 8080:8080 \
+          -e ALG_API_KEY=ci-smoke-key \
+          -e GOOGLE_CLIENT_ID=ci-smoke.apps.googleusercontent.com \
+          -e VENDOR_WEBHOOK_SECRET=ci-smoke-secret \
+          api-algorythmos:latest
+
+        cleanup() {
+          docker rm -f api-algorythmos-smoke >/dev/null 2>&1 || true
+        }
+        trap cleanup EXIT
+
+        for i in $(seq 1 40); do
+          STATUS=$(curl -s -o /tmp/healthz.out -w "%{http_code}" http://127.0.0.1:8080/alg/healthz || true)
+          if [ "$STATUS" != "200" ]; then
+            STATUS=$(curl -s -o /tmp/healthz.out -w "%{http_code}" http://127.0.0.1:8080/api/alg/healthz || true)
+          fi
+          if [ "$STATUS" = "200" ]; then
+            echo "✅ Container health endpoint is reachable"
+            exit 0
+          fi
+          sleep 2
+        done
+
+        echo "❌ Docker smoke test failed; container logs:"
+        docker logs api-algorythmos-smoke
+        exit 1
     
     - name: Deployment readiness check
       run: |

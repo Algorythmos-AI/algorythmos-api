@@ -4,7 +4,7 @@
 
 ### Production-Ready FastAPI Microservice for Intelligent Document Processing
 
-[![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.11](https://img.shields.io/badge/python-3.11-blue.svg)](https://www.python.org/downloads/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-00a393.svg?logo=fastapi)](https://fastapi.tiangolo.com)
 [![SQLAlchemy 2.0](https://img.shields.io/badge/SQLAlchemy-2.0+-red.svg)](https://www.sqlalchemy.org/)
 [![Tests](https://img.shields.io/badge/tests-150%2B%20passing-success.svg)](./tests)
@@ -89,7 +89,7 @@
 
 ### Prerequisites
 ```bash
-✅ Python 3.12+
+✅ Python 3.11
 ✅ Git
 ✅ curl (for testing)
 ```
@@ -117,6 +117,8 @@ uv sync
 cat > .env << EOF
 ALG_API_KEY=your-api-key-min-32-chars-here
 DATABASE_URL=sqlite+aiosqlite:///./dev.db
+REDIS_URL=redis://localhost:6379/0
+STATE_BACKEND=auto
 CORS_ORIGINS=http://localhost:3000
 LOG_LEVEL=INFO
 EOF
@@ -124,6 +126,7 @@ EOF
 # Or export directly
 export ALG_API_KEY="your-api-key-min-32-chars"
 export DATABASE_URL="sqlite+aiosqlite:///./dev.db"
+export REDIS_URL="redis://localhost:6379/0"
 ```
 
 #### 4️⃣ Setup Database
@@ -140,11 +143,23 @@ uv run uvicorn app:app --reload --host 0.0.0.0 --port 8000
 # Server will start at: http://localhost:8000
 ```
 
+#### 5️⃣b Start Async Parser Worker
+```bash
+# Runs durable parser jobs created by /parse/async
+uv run python scripts/parse_worker.py
+```
+
+Canonical runtime notes:
+- Deployable ASGI app: `app.py` exported `app`.
+- Compatibility entrypoints (`service.py`, `api/index.py`) re-export the same canonical app object.
+- Runtime/auth/business logic must not be duplicated outside `app.py`.
+- In production, distributed operational state requires Redis (`REDIS_URL`) and disallows `STATE_BACKEND=memory`.
+
 #### 6️⃣ Test API
 ```bash
 # Health check (public endpoint)
-curl http://localhost:8000/health
-# Expected: {"status": "healthy"}
+curl http://localhost:8000/alg/healthz
+# Expected: {"status": "ok"}
 
 # API documentation
 open http://localhost:8000/docs
@@ -154,8 +169,23 @@ open http://localhost:8000/docs
 - **API Base**: http://localhost:8000
 - **Swagger UI**: http://localhost:8000/docs  
 - **OpenAPI Schema**: http://localhost:8000/openapi.json
-- **Health Check**: http://localhost:8000/health
+- **Health Check**: http://localhost:8000/alg/healthz
 - **Metrics**: http://localhost:8000/metrics
+
+---
+
+### Async Parse Operations
+
+- `POST /api/parse/async` creates a durable parser run and enqueues background execution.
+- Worker status lifecycle: `queued -> running -> succeeded|failed|dead_letter`.
+- Retry policy uses bounded exponential backoff with jitter and dead-letters on max attempts.
+- Replay dead-letter parser runs:
+
+```bash
+uv run python scripts/replay_dead_letter_parser_runs.py --tenant-id <tenant> --run-id <run_id>
+```
+
+Operational playbook: `docs/ASYNC_OPERATIONS_RUNBOOK.md`.
 
 ---
 
@@ -649,9 +679,11 @@ The service uses SQLAlchemy async for persistence with support for PostgreSQL (p
 
 ### Local Development (SQLite)
 ```bash
-# SQLite database is created automatically
-# Location: ./data/app.db
-make dev
+# Set DATABASE_URL environment variable (or use the default sqlite path)
+export DATABASE_URL="sqlite+aiosqlite:///./dev.db"
+
+# Alembic-first workflow (required)
+alembic upgrade head
 ```
 
 ### Production (PostgreSQL)
@@ -659,7 +691,22 @@ make dev
 # Set DATABASE_URL environment variable
 export DATABASE_URL="postgresql+asyncpg://user:pass@localhost/dbname"
 
-# Run migrations
+# Verify migration graph has a single head
+alembic heads
+
+# Run migrations before starting app
+alembic upgrade head
+```
+
+### Migration Discipline
+```bash
+# Create migration from model changes
+alembic revision --autogenerate -m "describe change"
+
+# If parallel heads occur, create an explicit merge revision
+alembic merge <head1> <head2> -m "merge heads"
+
+# Apply schema before release/startup
 alembic upgrade head
 ```
 

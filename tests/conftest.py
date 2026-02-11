@@ -1,7 +1,7 @@
 import asyncio
-import importlib.util
 import hashlib
 import hmac
+import importlib
 import os
 import sys
 import time
@@ -19,17 +19,16 @@ if str(ROOT) not in sys.path:
 
 os.environ.setdefault("ALG_API_KEY", "local_dummy")
 os.environ.setdefault("VENDOR_WEBHOOK_SECRET", "stage7-secret")
+os.environ.setdefault("GOOGLE_CLIENT_ID", "test-client-id.apps.googleusercontent.com")
 os.environ.setdefault("NO_NETWORK", "1")
 
-APP_MODULE_PATH = ROOT / "app.py"
-spec = importlib.util.spec_from_file_location("app_main", APP_MODULE_PATH)
-if spec is None or spec.loader is None:
-    raise RuntimeError("Unable to load app module from app.py")
-app_module = importlib.util.module_from_spec(spec)
+app_package = importlib.import_module("app")
+app_module = getattr(app_package, "_app_entry", None)
+if app_module is None:
+    raise RuntimeError("Unable to resolve canonical app.py module from app package")
 sys.modules["app_main"] = app_module
-spec.loader.exec_module(app_module)
 
-fastapi_app = app_module.app
+fastapi_app = app_package.app
 # Default TTL for replay protection (used in Stage 5+ tests)
 WEBHOOK_REPLAY_TTL_S = getattr(app_module, "WEBHOOK_REPLAY_TTL_S", 300)
 
@@ -54,6 +53,7 @@ TEST_VENDOR_BASE = "https://vendor.test"
 
 settings.ALG_API_KEY = os.environ["ALG_API_KEY"]
 settings.VENDOR_WEBHOOK_SECRET = os.environ["VENDOR_WEBHOOK_SECRET"]
+settings.GOOGLE_CLIENT_ID = os.environ["GOOGLE_CLIENT_ID"]
 
 RUNS_TABLE_DDL = """
 CREATE TABLE IF NOT EXISTS runs (
