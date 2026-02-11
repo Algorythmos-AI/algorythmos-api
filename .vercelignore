@@ -1,0 +1,41 @@
+# Development and testing files
+tests/
+.pytest_cache/
+__pycache__/
+*.pyc
+.coverage
+htmlcov/
+
+# Development tools
+.pre-commit-config.yaml
+Makefile
+
+# Documentation
+README.md
+
+# Data files that aren't needed at runtime  
+files/
+orange_internet_usage.csv
+extract_orange_internet.py
+
+# Build artifacts
+.venv/
+.git/
+.gitignore
+.DS_Store
+
+# Alternative service files
+service.py
+main.py
+
+# Docker files
+Dockerfile
+.dockerignore
+
+# UV/Python package management
+uv.lock
+pyproject.toml
+
+# Environment files (use Vercel env vars instead)
+.env
+.env.example

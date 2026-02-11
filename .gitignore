@@ -1,0 +1,150 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+*.pyd
+*.dll
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+sdist/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache/
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+cover/
+
+# Translations
+*.mo
+*.pot
+
+# Type checker caches
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+.pytype/
+
+# Documentation
+docs/_build/
+
+# Jupyter Notebook
+.ipynb_checkpoints/
+
+# Virtual environments
+.env
+.env.*
+.envrc
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+.virtualenv
+.python-version
+__pypackages__/
+.uv/
+
+# Application state & local data
+instance/
+.webassets-cache/
+local_settings.py
+*.log
+logs/
+log/
+tmp/
+temp/
+*.tmp
+*.temp
+
+# Database files
+db.sqlite3
+db.sqlite3-journal
+*.sqlite3
+*.db
+dev.db
+
+# Celery
+celerybeat-schedule
+celerybeat.pid
+
+# SageMath
+*.sage.py
+
+# Scrapy
+.scrapy/
+
+# PyInstaller
+*.manifest
+*.spec
+
+# IPython
+profile_default/
+ipython_config.py
+
+# Encrypted / secrets
+*.pem
+*.key
+secrets.*
+
+# Editor directories and files
+.vscode/
+.idea/
+.spyderproject
+.spyproject
+.ropeproject
+.project
+.pydevproject
+*.code-workspace
+
+# Backup / swap
+*~
+*.swp
+*.swo
+*.orig
+*.rej
+
+# OS generated
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+Thumbs.db:encryptable
+Desktop.ini
+$RECYCLE.BIN/

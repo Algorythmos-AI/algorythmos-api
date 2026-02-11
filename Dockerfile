@@ -1,0 +1,64 @@
+# Override this at build time if Docker Hub TLS is flaky:
+#   --build-arg PY_BASE=mirror.gcr.io/library/python:3.11-slim
+ARG PY_BASE=python:3.11-slim
+
+############################
+# Builder
+############################
+FROM ${PY_BASE} AS builder
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+# minimal toolchain
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential gcc \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# copy only what we need to resolve and install
+COPY pyproject.toml README.md /app/
+COPY pdf_usage_extractor /app/pdf_usage_extractor
+COPY service.py /app/service.py
+
+# create venv and install deps with pip (simpler than uv inside Docker)
+RUN python -m venv /opt/venv
+ENV VIRTUAL_ENV=/opt/venv
+ENV PATH="/opt/venv/bin:${PATH}"
+RUN pip install --upgrade pip wheel
+RUN pip install --no-cache-dir .
+
+############################
+# Runtime
+############################
+FROM ${PY_BASE} AS runtime
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PATH="/opt/venv/bin:${PATH}"
+
+# runtime libs; keep this lean
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libxml2 libxslt1.1 libjpeg62-turbo zlib1g \
+    poppler-utils ghostscript ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# bring the environment and app code
+COPY --from=builder /opt/venv /opt/venv
+COPY service.py /app/service.py
+COPY pdf_usage_extractor /app/pdf_usage_extractor
+
+# non-root
+RUN useradd -m -u 10001 appuser && chown -R appuser:appuser /app
+USER appuser
+
+EXPOSE 8080
+
+# healthcheck (no heredoc)
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s \
+  CMD ["python","-c","import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8080/healthz').getcode()==200 else 1)"]
+
+CMD ["uvicorn","service:app","--host","0.0.0.0","--port","8080"]
