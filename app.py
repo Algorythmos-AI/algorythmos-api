@@ -758,19 +758,23 @@ def build_api() -> FastAPI:
     # Initialize database module references
     global async_session_factory, engine, get_session, Base, Run
     try:
-        import app.database as db_module
+        import database as db_module
         import app.models as models_module
         async_session_factory = db_module.async_session_factory
         engine = db_module.engine
         get_session = db_module.get_session
         Base = models_module.Base
         Run = models_module.Run
-    except ImportError:
+    except ImportError as e:
         # Database modules not available - tests may provide mocks
-        pass
+        logger = get_logger()
+        logger.warning(f"Database import failed: {e}")
 
     if async_session_factory is None:
-        raise RuntimeError("Database session factory is required for durable operational state")
+        raise RuntimeError(
+            "Database session factory is required for durable operational state. "
+            "Ensure database.py is importable and DATABASE_URL is configured."
+        )
 
     state_backend = _resolve_state_backend()
     using_memory_operational_state = state_backend == "memory"
