@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+import os
 import time
 from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+os.environ.setdefault("API_KEY", "local_dummy")
+
 from service import app
 
 client = TestClient(app)
-HEADERS = {"X-Tenant-Id": "tenant-test"}
+HEADERS = {"X-Tenant-Id": "tenant-test", "X-Api-Key": os.environ["API_KEY"]}
 FIXTURE_DIR = Path(__file__).resolve().parent.parent / "files"
 
 

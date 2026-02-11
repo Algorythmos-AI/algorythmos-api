@@ -16,6 +16,7 @@ Security notes:
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from typing import Optional
 
@@ -65,9 +66,7 @@ def verify_google_token(token: str, client_id: Optional[str] = None) -> GoogleUs
     
     Args:
         token: The Google ID token from the frontend (JWT format)
-        client_id: Optional Google OAuth client ID for audience validation.
-                   If None, audience validation is skipped (useful for development).
-                   In production, this should be set for security.
+        client_id: Google OAuth client ID used for audience validation.
         
     Returns:
         GoogleUserInfo with verified user data
@@ -75,13 +74,16 @@ def verify_google_token(token: str, client_id: Optional[str] = None) -> GoogleUs
     Raises:
         GoogleAuthError: If token is invalid, expired, or verification fails
     """
+    if not client_id:
+        raise GoogleAuthError("Google client ID is not configured")
+
     try:
         # Use Google's official verification
         # The Request() object handles HTTP transport for fetching public keys
         id_info = id_token.verify_oauth2_token(
             token,
             google_requests.Request(),
-            audience=client_id,  # None = skip audience check
+            audience=client_id,
         )
         
         # Validate issuer is from Google
@@ -103,6 +105,13 @@ def verify_google_token(token: str, client_id: Optional[str] = None) -> GoogleUs
         sub = id_info.get("sub")
         if not sub:
             raise GoogleAuthError("No sub claim in token")
+
+        # Defensive expiry validation (google-auth already checks this).
+        exp = id_info.get("exp")
+        if not isinstance(exp, (int, float)):
+            raise GoogleAuthError("Token expiry is missing")
+        if float(exp) <= time.time():
+            raise GoogleAuthError("Token has expired")
         
         return GoogleUserInfo(
             email=email,

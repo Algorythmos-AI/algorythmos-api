@@ -19,8 +19,14 @@ WORKDIR /app
 
 # copy only what we need to resolve and install
 COPY pyproject.toml README.md /app/
+COPY app.py config.py database.py models_api_key.py models_user.py /app/
+COPY alembic.ini /app/alembic.ini
+COPY app /app/app
+COPY core /app/core
+COPY document_processing /app/document_processing
+COPY vendor_libs /app/vendor_libs
+COPY alembic /app/alembic
 COPY pdf_usage_extractor /app/pdf_usage_extractor
-COPY service.py /app/service.py
 
 # create venv and install deps with pip (simpler than uv inside Docker)
 RUN python -m venv /opt/venv
@@ -48,8 +54,7 @@ WORKDIR /app
 
 # bring the environment and app code
 COPY --from=builder /opt/venv /opt/venv
-COPY service.py /app/service.py
-COPY pdf_usage_extractor /app/pdf_usage_extractor
+COPY --from=builder /app /app
 
 # non-root
 RUN useradd -m -u 10001 appuser && chown -R appuser:appuser /app
@@ -59,6 +64,8 @@ EXPOSE 8080
 
 # healthcheck (no heredoc)
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s \
-  CMD ["python","-c","import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8080/healthz').getcode()==200 else 1)"]
+  CMD ["python","-c","import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8080/alg/healthz').getcode()==200 else 1)"]
 
-CMD ["uvicorn","service:app","--host","0.0.0.0","--port","8080"]
+# Canonical runtime: top-level app.py exports the deployable ASGI app.
+# Run `alembic upgrade head` before starting this container in each environment.
+CMD ["uvicorn","app:app","--host","0.0.0.0","--port","8080"]
