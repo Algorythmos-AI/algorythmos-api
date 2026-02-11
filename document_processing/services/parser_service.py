@@ -1,14 +1,15 @@
 """Service for orchestrating document parsing operations."""
 
+import random
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Dict, Optional, Tuple
 
-from sqlalchemy import select, func
+from sqlalchemy import and_, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from document_processing.models import ParserRunDB, FileDB
+from document_processing.models import FileDB, ParserRunDB, ParserRunJobDB
 from document_processing.schemas import ParserRunStatus, ParseResult
 from document_processing.services import file_service
 from document_processing.services.classification_service import classify_document
@@ -107,8 +108,22 @@ async def execute_parser_run(
     
     if not run_db:
         raise ValueError(f"Parser run not found: {run_id}")
-    
-    if run_db.status not in ("pending", "running"):
+
+    if run_db.status == "completed":
+        return ParseResult(
+            run_id=run_db.id,
+            file_id=run_db.file_id,
+            status="completed",
+            classification=run_db.classification_result,
+            chunks=run_db.split_chunks,
+            extracted=run_db.extracted_data,
+            confidence=(run_db.confidence_score / 100.0) if run_db.confidence_score is not None else None,
+            processing_time_ms=run_db.processing_time_ms or 0,
+            completed_at=run_db.completed_at or datetime.utcnow(),
+            error=None,
+        )
+
+    if run_db.status not in ("pending", "running", "failed"):
         raise ValueError(f"Parser run already {run_db.status}")
     
     # Update status to running
@@ -155,7 +170,10 @@ async def execute_parser_run(
         classification_result = None
         if run_db.classifier_id:
             classification_result = await classify_document(
-                session, tenant_id, run_db.classifier_id, text
+                session,
+                tenant_id,
+                text,
+                run_db.classifier_id,
             )
             run_db.classification_result = classification_result
         
@@ -163,7 +181,10 @@ async def execute_parser_run(
         split_chunks = None
         if run_db.splitter_id:
             split_chunks = await split_document(
-                session, tenant_id, run_db.splitter_id, text, run_db.run_metadata
+                session,
+                tenant_id,
+                text,
+                run_db.splitter_id,
             )
             run_db.split_chunks = split_chunks
         
@@ -172,13 +193,25 @@ async def execute_parser_run(
         confidence_score = None
         if run_db.schema_id:
             extraction_result = await extract_with_schema(
-                session, tenant_id, run_db.schema_id, text, {}
+                session,
+                tenant_id,
+                run_db.schema_id,
+                text,
+                run_db.extractor_id,
             )
+            extracted_fields = extraction_result.get("fields")
+            if extracted_fields is None:
+                extracted_fields = extraction_result.get("extracted_fields", [])
             extracted_data = {
-                "fields": extraction_result["fields"],
+                "fields": extracted_fields,
                 "citations": extraction_result.get("citations", [])
             }
-            confidence_score = int(extraction_result.get("confidence", 0) * 100)
+            raw_confidence = extraction_result.get("confidence")
+            if raw_confidence is None:
+                total_fields = extraction_result.get("total_fields") or len(extracted_fields)
+                extracted_count = extraction_result.get("extracted_count", len(extracted_fields))
+                raw_confidence = (float(extracted_count) / float(total_fields)) if total_fields else 0.0
+            confidence_score = int(max(0.0, min(1.0, float(raw_confidence))) * 100)
             
             # PHASE 5: Optional LLM post-processing
             use_llm = run_db.run_metadata.get("use_llm_post_processing", False)
@@ -253,6 +286,284 @@ async def execute_parser_run(
             completed_at=run_db.completed_at,
             error=str(e)
         )
+
+
+async def enqueue_parser_run_job(
+    session: AsyncSession,
+    tenant_id: str,
+    run_id: str,
+    *,
+    max_attempts: int = 5,
+) -> ParserRunJobDB:
+    """Enqueue a durable async execution job for a parser run."""
+    existing_result = await session.execute(
+        select(ParserRunJobDB).where(
+            ParserRunJobDB.run_id == run_id,
+            ParserRunJobDB.tenant_id == tenant_id,
+        )
+    )
+    existing = existing_result.scalar_one_or_none()
+    if existing:
+        return existing
+
+    now = datetime.utcnow()
+    job = ParserRunJobDB(
+        id=f"pjob_{uuid.uuid4().hex}",
+        run_id=run_id,
+        tenant_id=tenant_id,
+        status="queued",
+        attempt_count=0,
+        max_attempts=max(1, int(max_attempts)),
+        last_error=None,
+        next_attempt_at=now,
+        lock_owner=None,
+        locked_at=None,
+        dead_lettered_at=None,
+        created_at=now,
+        updated_at=now,
+        started_at=None,
+        completed_at=None,
+    )
+    session.add(job)
+    await session.commit()
+    await session.refresh(job)
+    return job
+
+
+async def claim_next_parser_run_job(
+    session: AsyncSession,
+    *,
+    worker_id: str,
+    lock_timeout_seconds: int = 300,
+) -> Optional[ParserRunJobDB]:
+    """Claim the next due parser run job with optimistic concurrency semantics."""
+    now = datetime.utcnow()
+    stale_before = now - timedelta(seconds=max(1, int(lock_timeout_seconds)))
+
+    due_result = await session.execute(
+        select(ParserRunJobDB).where(
+            and_(
+                ParserRunJobDB.status.in_(["queued", "failed"]),
+                ParserRunJobDB.next_attempt_at <= now,
+            )
+        ).order_by(ParserRunJobDB.next_attempt_at.asc(), ParserRunJobDB.created_at.asc()).limit(1)
+    )
+    job = due_result.scalar_one_or_none()
+
+    if job is None:
+        stale_result = await session.execute(
+            select(ParserRunJobDB).where(
+                and_(
+                    ParserRunJobDB.status == "running",
+                    ParserRunJobDB.locked_at.is_not(None),
+                    ParserRunJobDB.locked_at <= stale_before,
+                )
+            ).order_by(ParserRunJobDB.locked_at.asc()).limit(1)
+        )
+        job = stale_result.scalar_one_or_none()
+
+    if job is None:
+        return None
+
+    previous_status = job.status
+    claim_result = await session.execute(
+        update(ParserRunJobDB)
+        .where(
+            and_(
+                ParserRunJobDB.id == job.id,
+                ParserRunJobDB.status == previous_status,
+            )
+        )
+        .values(
+            status="running",
+            attempt_count=job.attempt_count + 1,
+            lock_owner=worker_id,
+            locked_at=now,
+            started_at=job.started_at or now,
+            updated_at=now,
+        )
+    )
+    if claim_result.rowcount != 1:
+        await session.rollback()
+        return None
+
+    run_result = await session.execute(
+        select(ParserRunDB).where(
+            ParserRunDB.id == job.run_id,
+            ParserRunDB.tenant_id == job.tenant_id,
+        )
+    )
+    run_db = run_result.scalar_one_or_none()
+    if run_db and run_db.status in ("pending", "failed", "dead_letter"):
+        run_db.status = "running"
+        run_db.started_at = run_db.started_at or now
+        run_db.updated_at = now
+
+    await session.commit()
+    await session.refresh(job)
+    return job
+
+
+async def mark_parser_run_job_succeeded(
+    session: AsyncSession,
+    *,
+    job_id: str,
+) -> Optional[ParserRunJobDB]:
+    """Mark a parser run job as succeeded."""
+    now = datetime.utcnow()
+    result = await session.execute(
+        select(ParserRunJobDB).where(ParserRunJobDB.id == job_id)
+    )
+    job = result.scalar_one_or_none()
+    if not job:
+        return None
+
+    if job.status == "succeeded":
+        return job
+
+    job.status = "succeeded"
+    job.lock_owner = None
+    job.locked_at = None
+    job.completed_at = now
+    job.updated_at = now
+    await session.commit()
+    await session.refresh(job)
+    return job
+
+
+def _calculate_retry_delay_seconds(
+    attempt_count: int,
+    *,
+    base_delay_seconds: float,
+    max_delay_seconds: float,
+    jitter_seconds: float,
+) -> float:
+    exp_delay = base_delay_seconds * (2 ** max(0, attempt_count - 1))
+    bounded = min(max_delay_seconds, exp_delay)
+    jitter = random.uniform(0.0, max(0.0, jitter_seconds))
+    return bounded + jitter
+
+
+async def mark_parser_run_job_failed(
+    session: AsyncSession,
+    *,
+    job_id: str,
+    error_message: str,
+    base_delay_seconds: float = 2.0,
+    max_delay_seconds: float = 120.0,
+    jitter_seconds: float = 1.0,
+) -> Optional[ParserRunJobDB]:
+    """Handle parser run job failure with bounded retry and dead-lettering."""
+    now = datetime.utcnow()
+    result = await session.execute(
+        select(ParserRunJobDB).where(ParserRunJobDB.id == job_id)
+    )
+    job = result.scalar_one_or_none()
+    if not job:
+        return None
+
+    run_result = await session.execute(
+        select(ParserRunDB).where(
+            ParserRunDB.id == job.run_id,
+            ParserRunDB.tenant_id == job.tenant_id,
+        )
+    )
+    run_db = run_result.scalar_one_or_none()
+
+    job.last_error = (error_message or "Unknown parser execution error")[:4000]
+    job.lock_owner = None
+    job.locked_at = None
+    job.updated_at = now
+
+    if job.attempt_count >= job.max_attempts:
+        job.status = "dead_letter"
+        job.dead_lettered_at = now
+        job.completed_at = now
+        if run_db:
+            run_db.status = "dead_letter"
+            run_db.error_message = f"Dead-lettered after {job.attempt_count} attempts: {job.last_error}"
+            run_db.completed_at = now
+            run_db.updated_at = now
+    else:
+        delay_seconds = _calculate_retry_delay_seconds(
+            job.attempt_count,
+            base_delay_seconds=base_delay_seconds,
+            max_delay_seconds=max_delay_seconds,
+            jitter_seconds=jitter_seconds,
+        )
+        job.status = "failed"
+        job.next_attempt_at = now + timedelta(seconds=delay_seconds)
+        if run_db:
+            run_db.status = "failed"
+            run_db.error_message = job.last_error
+            run_db.updated_at = now
+
+    await session.commit()
+    await session.refresh(job)
+    return job
+
+
+async def replay_dead_letter_parser_run_job(
+    session: AsyncSession,
+    *,
+    tenant_id: str,
+    run_id: str,
+) -> bool:
+    """Replay a dead-lettered parser run job in an idempotent way."""
+    result = await session.execute(
+        select(ParserRunJobDB).where(
+            ParserRunJobDB.tenant_id == tenant_id,
+            ParserRunJobDB.run_id == run_id,
+        )
+    )
+    job = result.scalar_one_or_none()
+    if not job:
+        return False
+
+    if job.status != "dead_letter":
+        return True
+
+    now = datetime.utcnow()
+    job.status = "queued"
+    job.attempt_count = 0
+    job.last_error = None
+    job.next_attempt_at = now
+    job.lock_owner = None
+    job.locked_at = None
+    job.dead_lettered_at = None
+    job.updated_at = now
+
+    run_result = await session.execute(
+        select(ParserRunDB).where(
+            ParserRunDB.id == run_id,
+            ParserRunDB.tenant_id == tenant_id,
+        )
+    )
+    run_db = run_result.scalar_one_or_none()
+    if run_db:
+        run_db.status = "pending"
+        run_db.error_message = None
+        run_db.updated_at = now
+
+    await session.commit()
+    return True
+
+
+async def list_dead_letter_parser_run_jobs(
+    session: AsyncSession,
+    *,
+    tenant_id: Optional[str] = None,
+    limit: int = 100,
+) -> list[ParserRunJobDB]:
+    """List dead-letter parser jobs for operational replay tooling."""
+    query = select(ParserRunJobDB).where(ParserRunJobDB.status == "dead_letter")
+    if tenant_id:
+        query = query.where(ParserRunJobDB.tenant_id == tenant_id)
+
+    result = await session.execute(
+        query.order_by(ParserRunJobDB.dead_lettered_at.desc(), ParserRunJobDB.updated_at.desc()).limit(limit)
+    )
+    return list(result.scalars().all())
 
 
 async def get_parser_run(

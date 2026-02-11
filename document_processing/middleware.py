@@ -1,96 +1,57 @@
-"""
-Middleware for production features.
+"""Production middleware for rate limiting and idempotency."""
 
-Includes:
-- Rate limiting
-- Idempotency handling
-- Request tracking
-"""
+from __future__ import annotations
 
-import hashlib
-import time
-from collections import defaultdict
-from datetime import datetime, timedelta
-from threading import Lock
-from typing import Dict, Optional, Tuple
+import json
+from typing import Optional
 
 from fastapi import Request, Response, status
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
-
-# In-memory stores (in production, use Redis)
-_rate_limit_store: Dict[str, list] = defaultdict(list)
-_rate_limit_lock = Lock()
-
-_idempotency_store: Dict[str, Tuple[int, dict, datetime]] = {}
-_idempotency_lock = Lock()
+from document_processing.state import (
+    IdempotencyStore,
+    RateLimitStore,
+    build_idempotency_cache_key,
+)
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
-    """
-    Rate limiting middleware.
-    
-    Limits requests per tenant based on time windows.
-    Uses token bucket algorithm.
-    """
-    
-    def __init__(self, app, requests_per_minute: int = 60, requests_per_hour: int = 1000):
+    """Rate limiting middleware backed by pluggable distributed stores."""
+
+    def __init__(
+        self,
+        app,
+        *,
+        rate_limit_store: RateLimitStore,
+        requests_per_minute: int = 60,
+        requests_per_hour: int = 1000,
+        fail_closed: bool = False,
+    ):
         super().__init__(app)
+        self.rate_limit_store = rate_limit_store
         self.requests_per_minute = requests_per_minute
         self.requests_per_hour = requests_per_hour
-    
+        self.fail_closed = fail_closed
+
     async def dispatch(self, request: Request, call_next):
-        # Skip rate limiting for health checks
-        if request.url.path in ["/health", "/metrics", "/api/health"]:
+        if request.url.path in ["/health", "/metrics", "/api/health", "/alg/healthz"]:
             return await call_next(request)
-        
-        # Get tenant identifier (from API key or other auth)
+
         tenant_id = self._get_tenant_id(request)
-        
         if not tenant_id:
-            # No tenant ID, proceed without rate limiting
             return await call_next(request)
-        
-        # Check rate limits
-        now = time.time()
-        
-        with _rate_limit_lock:
-            # Get request timestamps for this tenant
-            timestamps = _rate_limit_store[tenant_id]
-            
-            # Remove old timestamps (older than 1 hour)
-            cutoff_hour = now - 3600
-            timestamps[:] = [ts for ts in timestamps if ts > cutoff_hour]
-            
-            # Check hourly limit
-            if len(timestamps) >= self.requests_per_hour:
-                return JSONResponse(
-                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                    content={
-                        "error": {
-                            "type": "rate_limit_exceeded",
-                            "message": "Too many requests. Hourly limit exceeded.",
-                            "details": {
-                                "limit": self.requests_per_hour,
-                                "window": "1 hour",
-                                "retry_after": int(timestamps[0] + 3600 - now)
-                            }
-                        }
-                    },
-                    headers={
-                        "X-RateLimit-Limit": str(self.requests_per_hour),
-                        "X-RateLimit-Remaining": "0",
-                        "X-RateLimit-Reset": str(int(timestamps[0] + 3600)),
-                        "Retry-After": str(int(timestamps[0] + 3600 - now))
-                    }
-                )
-            
-            # Check per-minute limit
-            cutoff_minute = now - 60
-            recent_requests = [ts for ts in timestamps if ts > cutoff_minute]
-            
-            if len(recent_requests) >= self.requests_per_minute:
+
+        minute_remaining = self.requests_per_minute
+        hour_remaining = self.requests_per_hour
+        try:
+            minute_decision = await self.rate_limit_store.check_limit(
+                tenant_id,
+                self.requests_per_minute,
+                60,
+            )
+            minute_remaining = minute_decision.remaining
+            if not minute_decision.allowed:
                 return JSONResponse(
                     status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                     content={
@@ -100,189 +61,187 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                             "details": {
                                 "limit": self.requests_per_minute,
                                 "window": "1 minute",
-                                "retry_after": int(recent_requests[0] + 60 - now)
-                            }
+                                "retry_after": minute_decision.retry_after_seconds,
+                            },
                         }
                     },
                     headers={
-                        "X-RateLimit-Limit": str(self.requests_per_minute),
-                        "X-RateLimit-Remaining": "0",
-                        "Retry-After": str(int(recent_requests[0] + 60 - now))
-                    }
+                        "X-RateLimit-Limit-Minute": str(self.requests_per_minute),
+                        "X-RateLimit-Remaining-Minute": "0",
+                        "X-RateLimit-Limit-Hour": str(self.requests_per_hour),
+                        "X-RateLimit-Remaining-Hour": str(hour_remaining),
+                        "Retry-After": str(minute_decision.retry_after_seconds),
+                    },
                 )
-            
-            # Record this request
-            timestamps.append(now)
-            
-            # Calculate remaining requests
-            remaining_minute = self.requests_per_minute - len(recent_requests) - 1
-            remaining_hour = self.requests_per_hour - len(timestamps)
-        
-        # Process request
+
+            hour_decision = await self.rate_limit_store.check_limit(
+                tenant_id,
+                self.requests_per_hour,
+                3600,
+            )
+            hour_remaining = hour_decision.remaining
+            if not hour_decision.allowed:
+                return JSONResponse(
+                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                    content={
+                        "error": {
+                            "type": "rate_limit_exceeded",
+                            "message": "Too many requests. Hourly limit exceeded.",
+                            "details": {
+                                "limit": self.requests_per_hour,
+                                "window": "1 hour",
+                                "retry_after": hour_decision.retry_after_seconds,
+                            },
+                        }
+                    },
+                    headers={
+                        "X-RateLimit-Limit-Minute": str(self.requests_per_minute),
+                        "X-RateLimit-Remaining-Minute": str(minute_remaining),
+                        "X-RateLimit-Limit-Hour": str(self.requests_per_hour),
+                        "X-RateLimit-Remaining-Hour": "0",
+                        "Retry-After": str(hour_decision.retry_after_seconds),
+                    },
+                )
+        except Exception as exc:
+            if self.fail_closed:
+                return JSONResponse(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    content={
+                        "error": {
+                            "type": "rate_limit_backend_unavailable",
+                            "message": f"Rate limit backend unavailable: {type(exc).__name__}",
+                        }
+                    },
+                )
+
         response = await call_next(request)
-        
-        # Add rate limit headers
+
         response.headers["X-RateLimit-Limit-Minute"] = str(self.requests_per_minute)
-        response.headers["X-RateLimit-Remaining-Minute"] = str(max(0, remaining_minute))
+        response.headers["X-RateLimit-Remaining-Minute"] = str(max(0, minute_remaining))
         response.headers["X-RateLimit-Limit-Hour"] = str(self.requests_per_hour)
-        response.headers["X-RateLimit-Remaining-Hour"] = str(max(0, remaining_hour))
-        
+        response.headers["X-RateLimit-Remaining-Hour"] = str(max(0, hour_remaining))
         return response
-    
+
     def _get_tenant_id(self, request: Request) -> Optional[str]:
-        """Extract tenant ID from request."""
-        # Try to get from state (set by auth middleware)
         if hasattr(request.state, "tenant_id"):
             return request.state.tenant_id
-        
-        # Try to extract from API key header
-        api_key = request.headers.get("X-API-Key")
-        if api_key:
-            # In production, decode/validate the API key to get tenant ID
-            # For now, use hash of API key as tenant ID
-            return hashlib.sha256(api_key.encode()).hexdigest()[:16]
-        
-        return None
+        return request.headers.get("X-Tenant-Id") or request.headers.get("X-Tenant-ID")
 
 
 class IdempotencyMiddleware(BaseHTTPMiddleware):
-    """
-    Idempotency middleware.
-    
-    Handles idempotency keys for POST/PUT/PATCH requests.
-    Stores responses and returns cached responses for duplicate requests.
-    """
-    
-    def __init__(self, app, ttl_seconds: int = 86400):  # 24 hours default
+    """Durable idempotency middleware for mutating HTTP methods."""
+
+    def __init__(
+        self,
+        app,
+        *,
+        idempotency_store: IdempotencyStore,
+        ttl_seconds: int = 86400,
+        fail_closed: bool = False,
+    ):
         super().__init__(app)
+        self.idempotency_store = idempotency_store
         self.ttl_seconds = ttl_seconds
-    
+        self.fail_closed = fail_closed
+
     async def dispatch(self, request: Request, call_next):
-        # Only handle POST/PUT/PATCH requests
         if request.method not in ["POST", "PUT", "PATCH"]:
             return await call_next(request)
-        
-        # Get idempotency key from header
+
         idempotency_key = request.headers.get("Idempotency-Key")
-        
         if not idempotency_key:
-            # No idempotency key, process normally
             return await call_next(request)
-        
-        # Create cache key (include tenant ID if available)
+
         tenant_id = self._get_tenant_id(request)
-        cache_key = f"{tenant_id}:{idempotency_key}" if tenant_id else idempotency_key
-        
-        # Check if we've seen this request before
-        with _idempotency_lock:
-            if cache_key in _idempotency_store:
-                status_code, response_data, created_at = _idempotency_store[cache_key]
-                
-                # Check if cached response is still valid
-                age = (datetime.utcnow() - created_at).total_seconds()
-                if age < self.ttl_seconds:
-                    # Return cached response
-                    return JSONResponse(
-                        status_code=status_code,
-                        content=response_data,
-                        headers={
-                            "X-Idempotency-Replay": "true",
-                            "X-Idempotency-Age": str(int(age))
+        cache_key = build_idempotency_cache_key(
+            tenant_id,
+            idempotency_key,
+            request.method,
+            request.url.path,
+        )
+
+        try:
+            acquired = await self.idempotency_store.acquire(
+                cache_key=cache_key,
+                tenant_id=tenant_id,
+                idempotency_key=idempotency_key,
+                request_method=request.method,
+                request_path=request.url.path,
+                ttl_seconds=self.ttl_seconds,
+            )
+        except Exception as exc:
+            if self.fail_closed:
+                return JSONResponse(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    content={
+                        "error": {
+                            "type": "idempotency_backend_unavailable",
+                            "message": f"Idempotency backend unavailable: {type(exc).__name__}",
                         }
-                    )
-                else:
-                    # Cached response expired, remove it
-                    del _idempotency_store[cache_key]
-        
-        # Process request
+                    },
+                )
+            return await call_next(request)
+
+        if acquired.state == "replay":
+            return JSONResponse(
+                status_code=acquired.status_code or status.HTTP_200_OK,
+                content=acquired.response_body or {},
+                headers={
+                    "X-Idempotency-Replay": "true",
+                    "X-Idempotency-Age": str(acquired.age_seconds),
+                },
+            )
+
+        if acquired.state == "in_progress":
+            return JSONResponse(
+                status_code=status.HTTP_409_CONFLICT,
+                content={
+                    "error": {
+                        "type": "idempotency_in_progress",
+                        "message": "An identical request is currently in progress",
+                    }
+                },
+            )
+
         response = await call_next(request)
-        
-        # Cache successful responses (2xx status codes)
-        if 200 <= response.status_code < 300:
-            # Read response body
-            body = b""
-            async for chunk in response.body_iterator:
-                body += chunk
-            
-            # Parse JSON response
-            import json
-            try:
-                response_data = json.loads(body.decode())
-                
-                # Store in cache
-                with _idempotency_lock:
-                    _idempotency_store[cache_key] = (
-                        response.status_code,
-                        response_data,
-                        datetime.utcnow()
-                    )
-                    
-                    # Cleanup old entries (simple LRU-like behavior)
-                    if len(_idempotency_store) > 10000:
-                        # Remove oldest 10%
-                        sorted_keys = sorted(
-                            _idempotency_store.keys(),
-                            key=lambda k: _idempotency_store[k][2]
-                        )
-                        for key in sorted_keys[:1000]:
-                            del _idempotency_store[key]
-                
-                # Return response with new body
+
+        if not (200 <= response.status_code < 300):
+            await self.idempotency_store.release_in_progress(cache_key=cache_key)
+            return response
+
+        body = b""
+        async for chunk in response.body_iterator:
+            body += chunk
+
+        try:
+            payload = json.loads(body.decode())
+            if isinstance(payload, dict):
+                await self.idempotency_store.store_response(
+                    cache_key=cache_key,
+                    status_code=response.status_code,
+                    response_body=payload,
+                )
                 return JSONResponse(
                     status_code=response.status_code,
-                    content=response_data,
-                    headers=dict(response.headers)
+                    content=payload,
+                    headers=dict(response.headers),
                 )
-            
-            except Exception:
-                # Failed to cache, return original response
-                return Response(
-                    content=body,
-                    status_code=response.status_code,
-                    headers=dict(response.headers)
-                )
-        
-        return response
-    
+        except Exception:
+            await self.idempotency_store.release_in_progress(cache_key=cache_key)
+
+        return Response(content=body, status_code=response.status_code, headers=dict(response.headers))
+
     def _get_tenant_id(self, request: Request) -> Optional[str]:
-        """Extract tenant ID from request."""
         if hasattr(request.state, "tenant_id"):
             return request.state.tenant_id
-        
-        api_key = request.headers.get("X-API-Key")
-        if api_key:
-            return hashlib.sha256(api_key.encode()).hexdigest()[:16]
-        
-        return None
+        return request.headers.get("X-Tenant-Id") or request.headers.get("X-Tenant-ID")
 
 
-def cleanup_old_entries():
-    """
-    Cleanup old entries from in-memory stores.
-    
-    Should be called periodically (e.g., via scheduled task).
-    """
-    now = time.time()
-    cutoff = now - 3600  # 1 hour
-    
-    # Cleanup rate limit store
-    with _rate_limit_lock:
-        for tenant_id in list(_rate_limit_store.keys()):
-            timestamps = _rate_limit_store[tenant_id]
-            timestamps[:] = [ts for ts in timestamps if ts > cutoff]
-            
-            # Remove empty entries
-            if not timestamps:
-                del _rate_limit_store[tenant_id]
-    
-    # Cleanup idempotency store
-    cutoff_datetime = datetime.utcnow() - timedelta(hours=24)
-    
-    with _idempotency_lock:
-        expired_keys = [
-            key for key, (_, _, created_at) in _idempotency_store.items()
-            if created_at < cutoff_datetime
-        ]
-        
-        for key in expired_keys:
-            del _idempotency_store[key]
+def cleanup_old_entries() -> None:
+    """Compatibility no-op: cleanup is handled by durable store TTL/indexes."""
+    return
+
+
+# Backward compatibility symbols for legacy tests; no mutable in-memory state is used.
+_rate_limit_store = None
+_idempotency_store = None
