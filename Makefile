@@ -1,0 +1,114 @@
+# Makefile for development tasks
+
+UV ?= uv
+IMAGE ?= pdf-usage:latest
+
+.PHONY: help install dev test fmt lint clean build deploy docker-build docker-run
+
+help: ## Show this help message
+	@echo "Available commands:"
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
+
+install: ## Install dependencies
+	$(UV) sync --all-extras
+
+dev: ## Start development server
+	$(UV) run uvicorn app:app --reload --host 0.0.0.0 --port 8000
+
+test: ## Run tests
+	$(UV) run pytest -v --cov=. --cov-report=term-missing --cov-report=html
+
+test-fast: ## Run tests without coverage
+	$(UV) run pytest -v
+
+fmt: ## Format code
+	$(UV) run black . --line-length=120
+	$(UV) run isort . --profile=black --line-length=120
+	$(UV) run ruff format .
+
+lint: ## Lint code
+	$(UV) run ruff check . --fix
+	$(UV) run black . --check --line-length=120
+	$(UV) run isort . --check-only --profile=black --line-length=120
+
+clean: ## Clean build artifacts
+	rm -rf __pycache__/
+	rm -rf .pytest_cache/
+	rm -rf htmlcov/
+	rm -rf .coverage
+	find . -type d -name __pycache__ -exec rm -rf {} +
+	find . -type f -name "*.pyc" -delete
+
+build: ## Build the package
+	$(UV) build
+
+deploy-check: ## Check deployment readiness
+	@echo "Checking deployment readiness..."
+	@echo "✓ vercel.json exists: $$(test -f vercel.json && echo "Yes" || echo "No")"
+	@echo "✓ api/index.py exists: $$(test -f api/index.py && echo "Yes" || echo "No")"
+	@echo "✓ .env.example exists: $$(test -f .env.example && echo "Yes" || echo "No")"
+	@echo "✓ Tests pass: $$($(UV) run pytest --tb=no -q && echo "Yes" || echo "No")"
+
+pre-commit-install: ## Install pre-commit hooks
+	$(UV) run pre-commit install
+
+pre-commit-run: ## Run pre-commit on all files
+	$(UV) run pre-commit run --all-files
+
+setup-dev: install pre-commit-install ## Setup development environment
+	@echo "Development environment setup complete!"
+	@echo "Run 'make dev' to start the development server"
+
+# Docker targets
+docker-build: ## Build Docker image
+	docker build -t $(IMAGE) .
+
+docker-run: ## Run Docker container
+	docker run --rm -p 8080:8080 --env-file .env.example $(IMAGE)
+
+# Vercel deployment helpers
+vercel-dev: ## Start Vercel development server
+	vercel dev
+
+vercel-deploy: ## Deploy to Vercel
+	vercel --prod
+
+stage2-gate: ## Start local server with /api root, run smokes, clean up
+	@chmod +x scripts/stage2_gate.sh
+	@./scripts/stage2_gate.sh
+
+stage3-gate: ## Start server, run Stage-3 tests, clean up
+	@chmod +x scripts/stage3_gate.sh
+	@./scripts/stage3_gate.sh
+
+stage4-gate: ## Start server, run Stage-4 tests, clean up
+	@chmod +x scripts/stage4_gate.sh
+	@./scripts/stage4_gate.sh
+
+gates: ## Run Stage 2 → 3 → 4 gates
+	@chmod +x scripts/all_gates.sh
+	@./scripts/all_gates.sh
+
+stage5-gate: ## Start server, run Stage-5 webhook security tests, clean up
+	@chmod +x scripts/stage5_gate.sh
+	@./scripts/stage5_gate.sh
+
+stage6a-gate: ## Start server, run Stage-6A DB tests, clean up
+	@chmod +x scripts/stage6a_gate.sh
+	@./scripts/stage6a_gate.sh
+
+stage6b-gate: ## Start server, run Stage-6B observability tests, clean up
+	@chmod +x scripts/stage6b_gate.sh
+	@./scripts/stage6b_gate.sh
+
+stage6c-gate: ## Start server, run Stage-6C OpenAPI tests, clean up
+	@chmod +x scripts/stage6c_gate.sh
+	@./scripts/stage6c_gate.sh
+
+stage7-gate: ## Run Stage-7 tests (pytest+respx)
+	@chmod +x scripts/stage7_gate.sh
+	@./scripts/stage7_gate.sh
+
+stage8-gate: ## Start server, run Stage-8 runs index tests
+	@chmod +x scripts/stage8_gate.sh
+	@./scripts/stage8_gate.sh
