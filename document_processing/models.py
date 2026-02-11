@@ -420,3 +420,85 @@ class EvalItemDB(Base):
     
     def __repr__(self) -> str:
         return f"<EvalItem(id={self.id}, evaluation_set_id={self.evaluation_set_id}, status={self.last_run_status})>"
+
+
+class IdempotencyKeyDB(Base):
+    """Durable idempotency records for POST/PUT/PATCH request replay."""
+
+    __tablename__ = "idempotency_keys"
+
+    cache_key = Column(String(255), primary_key=True)
+    tenant_id = Column(String, nullable=True, index=True)
+    request_method = Column(String(10), nullable=False)
+    request_path = Column(String(255), nullable=False)
+    idempotency_key = Column(String(255), nullable=False, index=True)
+    status_code = Column(Integer, nullable=True)
+    response_body = Column(JSON, nullable=True)
+    in_progress = Column(Boolean, nullable=False, default=True, index=True)
+    created_at = Column(DateTime, nullable=False, default=func.now())
+    updated_at = Column(DateTime, nullable=False, default=func.now(), onupdate=func.now())
+    expires_at = Column(DateTime, nullable=False, index=True)
+
+    def __repr__(self) -> str:
+        return f"<IdempotencyKey(cache_key={self.cache_key}, in_progress={self.in_progress})>"
+
+
+class WebhookReplayEventDB(Base):
+    """Durable replay-protection entries for webhook event IDs."""
+
+    __tablename__ = "webhook_replay_events"
+
+    event_id = Column(String(255), primary_key=True)
+    created_at = Column(DateTime, nullable=False, default=func.now())
+    expires_at = Column(DateTime, nullable=False, index=True)
+
+    def __repr__(self) -> str:
+        return f"<WebhookReplayEvent(event_id={self.event_id})>"
+
+
+class BackgroundJobDB(Base):
+    """Durable job records for /jobs endpoint processing."""
+
+    __tablename__ = "background_jobs"
+
+    id = Column(String, primary_key=True)
+    tenant_id = Column(String, nullable=False, index=True)
+    status = Column(String(20), nullable=False, index=True)  # queued, running, succeeded, failed
+    request_id = Column(String(64), nullable=True)
+    payload = Column(JSON, nullable=False)
+    webhook_url = Column(String(500), nullable=True)
+    result = Column(JSON, nullable=True)
+    error = Column(Text, nullable=True)
+    duration_sec = Column(Float, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=func.now())
+    updated_at = Column(DateTime, nullable=False, default=func.now(), onupdate=func.now())
+    started_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+
+    def __repr__(self) -> str:
+        return f"<BackgroundJob(id={self.id}, status={self.status}, tenant_id={self.tenant_id})>"
+
+
+class ParserRunJobDB(Base):
+    """Durable queue jobs for asynchronous parser run execution."""
+
+    __tablename__ = "parser_run_jobs"
+
+    id = Column(String, primary_key=True)
+    run_id = Column(String, nullable=False, unique=True, index=True)
+    tenant_id = Column(String, nullable=False, index=True)
+    status = Column(String(20), nullable=False, index=True)  # queued, running, succeeded, failed, dead_letter
+    attempt_count = Column(Integer, nullable=False, default=0)
+    max_attempts = Column(Integer, nullable=False, default=5)
+    last_error = Column(Text, nullable=True)
+    next_attempt_at = Column(DateTime, nullable=False, default=func.now(), index=True)
+    lock_owner = Column(String(128), nullable=True, index=True)
+    locked_at = Column(DateTime, nullable=True, index=True)
+    dead_lettered_at = Column(DateTime, nullable=True, index=True)
+    created_at = Column(DateTime, nullable=False, default=func.now())
+    updated_at = Column(DateTime, nullable=False, default=func.now(), onupdate=func.now())
+    started_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+
+    def __repr__(self) -> str:
+        return f"<ParserRunJob(id={self.id}, run_id={self.run_id}, status={self.status})>"

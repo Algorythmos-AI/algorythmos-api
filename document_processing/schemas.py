@@ -303,7 +303,7 @@ class ParserRunStatus(BaseModel):
     
     run_id: str = Field(..., description="Unique run identifier")
     file_id: str = Field(..., description="File being parsed")
-    status: Literal["pending", "running", "completed", "failed"] = Field(
+    status: Literal["pending", "running", "completed", "failed", "dead_letter"] = Field(
         ..., description="Current status"
     )
     tenant_id: str = Field(..., description="Owner tenant ID")

@@ -8,7 +8,6 @@ import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from threading import Lock
 from typing import Any, Dict, List, Literal, Optional
 from uuid import uuid4
 
@@ -23,12 +22,18 @@ from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from config import settings
+from document_processing.state import (
+    InMemoryRateLimitStore,
+    RedisRateLimitStore,
+    SQLBackgroundJobStore,
+    SQLIdempotencyStore,
+    SQLWebhookReplayStore,
+)
 from pdf_usage_extractor import ExtractionRouter
 from pdf_usage_extractor.logging_utils import get_logger
 from pdf_usage_extractor.schemas import ExtractResponse, UsageRecord, ProcessorCreateRunRequest, ProcessorUpdateRequest, ProcessorInfo
 from vendor_libs.services import vendor
-from vendor_libs.utils.runstore import run_store
-from vendor_libs.utils.security import parse_signature_header, verify_hmac_sha256, ReplaySet
+from vendor_libs.utils.security import parse_signature_header, verify_hmac_sha256
 from vendor_libs.utils.observability import metrics_app, runs_started, runs_succeeded, runs_failed
 from prometheus_client import Counter, Histogram
 
@@ -117,7 +122,7 @@ class JobCreate(BaseModel):
     provider_hint: Optional[str] = None
     debug: bool = False
     webhook_url: Optional[AnyHttpUrl] = None
-    
+
     def is_cloud_path(self) -> bool:
         """Check if input_path is a cloud storage URI."""
         return self.input_path.startswith(('gs://', 's3://', 'azure://', 'http://', 'https://'))
@@ -150,7 +155,7 @@ JobRecord.model_rebuild()
 
 class RequestContextMiddleware(BaseHTTPMiddleware):
     """Add request ID to all requests."""
-    
+
     async def dispatch(self, request: Request, call_next):  # type: ignore[override]
         request_id = request.headers.get("X-Request-ID", str(uuid4()))
         request.state.request_id = request_id
@@ -161,7 +166,7 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
 
 class FileSizeMiddleware(BaseHTTPMiddleware):
     """Enforce maximum file size limits."""
-    
+
     async def dispatch(self, request: Request, call_next):  # type: ignore[override]
         # Check content length header if available
         content_length = request.headers.get("content-length")
@@ -171,7 +176,7 @@ class FileSizeMiddleware(BaseHTTPMiddleware):
                 content='{"code": "FILE_TOO_LARGE", "message": "File exceeds ' + str(settings.MAX_FILE_MB) + ' MB limit"}',
                 media_type="application/json"
             )
-        
+
         return await call_next(request)
 
 
@@ -186,7 +191,7 @@ def _get_or_create_metrics():
     global webhook_deliveries_total, webhook_delivery_duration_seconds
     global parser_runs_total, parser_run_duration_seconds
     global rate_limit_hits_total, idempotency_replays_total
-    
+
     if http_requests_total is None:
         try:
             http_requests_total = Counter(
@@ -200,7 +205,7 @@ def _get_or_create_metrics():
             http_requests_total = REGISTRY._collector_to_names.get(
                 next((c for c in REGISTRY._collector_to_names if hasattr(c, '_name') and c._name == 'http_requests_total'), None)
             )
-    
+
     if http_request_duration_seconds is None:
         try:
             http_request_duration_seconds = Histogram(
@@ -215,7 +220,7 @@ def _get_or_create_metrics():
             http_request_duration_seconds = REGISTRY._collector_to_names.get(
                 next((c for c in REGISTRY._collector_to_names if hasattr(c, '_name') and c._name == 'http_request_duration_seconds'), None)
             )
-    
+
     # Webhook metrics
     if webhook_deliveries_total is None:
         try:
@@ -229,7 +234,7 @@ def _get_or_create_metrics():
             webhook_deliveries_total = REGISTRY._collector_to_names.get(
                 next((c for c in REGISTRY._collector_to_names if hasattr(c, '_name') and c._name == 'webhook_deliveries_total'), None)
             )
-    
+
     if webhook_delivery_duration_seconds is None:
         try:
             webhook_delivery_duration_seconds = Histogram(
@@ -243,7 +248,7 @@ def _get_or_create_metrics():
             webhook_delivery_duration_seconds = REGISTRY._collector_to_names.get(
                 next((c for c in REGISTRY._collector_to_names if hasattr(c, '_name') and c._name == 'webhook_delivery_duration_seconds'), None)
             )
-    
+
     # Parser run metrics
     if parser_runs_total is None:
         try:
@@ -257,7 +262,7 @@ def _get_or_create_metrics():
             parser_runs_total = REGISTRY._collector_to_names.get(
                 next((c for c in REGISTRY._collector_to_names if hasattr(c, '_name') and c._name == 'parser_runs_total'), None)
             )
-    
+
     if parser_run_duration_seconds is None:
         try:
             parser_run_duration_seconds = Histogram(
@@ -271,7 +276,7 @@ def _get_or_create_metrics():
             parser_run_duration_seconds = REGISTRY._collector_to_names.get(
                 next((c for c in REGISTRY._collector_to_names if hasattr(c, '_name') and c._name == 'parser_run_duration_seconds'), None)
             )
-    
+
     # Rate limiting metrics
     if rate_limit_hits_total is None:
         try:
@@ -285,7 +290,7 @@ def _get_or_create_metrics():
             rate_limit_hits_total = REGISTRY._collector_to_names.get(
                 next((c for c in REGISTRY._collector_to_names if hasattr(c, '_name') and c._name == 'rate_limit_hits_total'), None)
             )
-    
+
     # Idempotency metrics
     if idempotency_replays_total is None:
         try:
@@ -299,7 +304,7 @@ def _get_or_create_metrics():
             idempotency_replays_total = REGISTRY._collector_to_names.get(
                 next((c for c in REGISTRY._collector_to_names if hasattr(c, '_name') and c._name == 'idempotency_replays_total'), None)
             )
-    
+
     return (
         http_requests_total, http_request_duration_seconds,
         webhook_deliveries_total, webhook_delivery_duration_seconds,
@@ -310,42 +315,42 @@ def _get_or_create_metrics():
 
 class MetricsMiddleware(BaseHTTPMiddleware):
     """Track HTTP request metrics for Prometheus."""
-    
+
     async def dispatch(self, request: Request, call_next):  # type: ignore[override]
         # Skip metrics endpoint itself to avoid recursion
         if request.url.path in ("/metrics", "/api/metrics"):
             return await call_next(request)
-        
+
         start_time = time.time()
         response = await call_next(request)
         duration = time.time() - start_time
-        
+
         # Normalize endpoint path for cardinality control
         endpoint = self._normalize_path(request.url.path)
         method = request.method
         status_code = str(response.status_code)
-        
+
         # Get or create metrics
         metrics = _get_or_create_metrics()
         requests_total = metrics[0]
         request_duration = metrics[1]
-        
+
         # Record metrics
         if requests_total and request_duration:
             requests_total.labels(method=method, endpoint=endpoint, status_code=status_code).inc()
             request_duration.labels(method=method, endpoint=endpoint, status_code=status_code).observe(duration)
-        
+
         return response
-    
+
     def _normalize_path(self, path: str) -> str:
         """Normalize path to reduce cardinality (replace IDs with placeholders)."""
         # Remove /api prefix if present
         if path.startswith("/api/"):
             path = path[4:]
-        
+
         parts = path.split("/")
         normalized = []
-        
+
         for i, part in enumerate(parts):
             if not part:
                 continue
@@ -354,14 +359,9 @@ class MetricsMiddleware(BaseHTTPMiddleware):
                 normalized.append("{id}")
             else:
                 normalized.append(part)
-        
+
         return "/" + "/".join(normalized) if normalized else path
 
-
-# Global state
-_rate_bucket: Dict[tuple[str, int], int] = {}
-_rate_lock = Lock()
-_jobs: Dict[str, JobRecord] = {}
 
 # Stage 3+ constants - exposed for tests
 RUN_MAX_FILE_BYTES = settings.RUN_MAX_FILE_BYTES
@@ -370,36 +370,98 @@ WEBHOOK_REPLAY_TTL_S = settings.WEBHOOK_REPLAY_TTL_S
 WEBHOOK_REPLAY_WINDOW_S = settings.WEBHOOK_REPLAY_WINDOW_S
 _processor_runs: Dict[str, JobRecord] = {}  # For Algorythmos-style runs
 
-# Webhook replay protection
-webhook_replay_set = ReplaySet(ttl_seconds=WEBHOOK_REPLAY_TTL_S)
-
 
 def _utcnow() -> datetime:
     """Get current UTC timestamp."""
     return datetime.now(timezone.utc)
 
 
-def _enforce_rate_limit(tenant_id: str) -> None:
-    """Enforce rate limiting per tenant."""
+def _resolve_state_backend() -> str:
+    configured = (settings.STATE_BACKEND or "auto").strip().lower()
+    if configured == "auto":
+        return "redis" if settings.REDIS_URL else "memory"
+    if configured in {"redis", "memory"}:
+        return configured
+    raise RuntimeError(f"Unsupported STATE_BACKEND value: {settings.STATE_BACKEND}")
+
+
+async def _enforce_rate_limit(request: Request, tenant_id: str) -> None:
+    """Enforce per-tenant request rate limiting via configured store backend."""
     rate = settings.RATE_PER_MIN
     if rate <= 0:
         return
-    
-    current_window = int(time.time() // 60)
-    with _rate_lock:
-        # Clean up stale rate buckets
-        stale_keys = [key for key in _rate_bucket if key[1] < current_window]
-        for key in stale_keys:
-            _rate_bucket.pop(key, None)
 
-        bucket_key = (tenant_id, current_window)
-        current = _rate_bucket.get(bucket_key, 0) + 1
-        if current > rate:
+    store = getattr(request.app.state, "rate_limit_store", None)
+    if store is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"code": "RATE_LIMIT_NOT_CONFIGURED", "message": "Rate limiting backend is not configured"},
+        )
+
+    try:
+        decision = await store.check_limit(tenant_id, rate, 60)
+    except Exception as exc:
+        if _is_production_environment():
             raise HTTPException(
-                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail={"code": "RATE_LIMIT_EXCEEDED", "message": "Rate limit exceeded"}
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "code": "RATE_LIMIT_BACKEND_UNAVAILABLE",
+                    "message": f"Rate limit backend unavailable: {type(exc).__name__}",
+                },
             )
-        _rate_bucket[bucket_key] = current
+        return
+
+    if not decision.allowed:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail={"code": "RATE_LIMIT_EXCEEDED", "message": "Rate limit exceeded"},
+            headers={"Retry-After": str(decision.retry_after_seconds)},
+        )
+
+
+def _require_configured_static_api_key() -> str:
+    """Return configured static API key or raise a server-side auth configuration error."""
+    configured_key = (settings.ALG_API_KEY or "").strip()
+    if not configured_key:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "AUTH_NOT_CONFIGURED",
+                "message": "Static API key authentication is not configured",
+            },
+        )
+    return configured_key
+
+
+def _is_production_environment() -> bool:
+    """Return True when runtime is configured for production mode."""
+    return (settings.ENV or "").strip().lower() in {"prod", "production"}
+
+
+def _validate_startup_security_configuration() -> None:
+    """Fail fast when required auth configuration is missing in production."""
+    if not _is_production_environment():
+        return
+
+    if not (settings.ALG_API_KEY or "").strip():
+        raise RuntimeError("ALG_API_KEY must be configured when ENV is production")
+
+    if not (settings.GOOGLE_CLIENT_ID or "").strip():
+        raise RuntimeError("GOOGLE_CLIENT_ID must be configured when ENV is production")
+
+
+async def _validate_startup_state_configuration(app: FastAPI) -> None:
+    """Fail fast when distributed state backends are not production-safe."""
+    using_memory = bool(getattr(app.state, "using_memory_operational_state", False))
+    if _is_production_environment() and using_memory:
+        raise RuntimeError("In-memory operational state backends are forbidden in production")
+
+    rate_limit_store = getattr(app.state, "rate_limit_store", None)
+    if _is_production_environment() and rate_limit_store is None:
+        raise RuntimeError("Rate limit store must be configured in production")
+
+    if isinstance(rate_limit_store, RedisRateLimitStore):
+        await rate_limit_store.ping()
 
 
 async def require_key(
@@ -412,7 +474,7 @@ async def require_key(
 ) -> Dict[str, str]:
     """
     Validate authentication and extract tenant context.
-    
+
     Supports:
     - X-API-Key header (legacy)
     - Authorization: Bearer <token> header (Extend parity)
@@ -423,42 +485,41 @@ async def require_key(
     bearer_token = None
     if authorization and authorization.startswith("Bearer "):
         bearer_token = authorization[7:]  # Strip "Bearer " prefix
-    
+
+    expected_api_key = _require_configured_static_api_key()
+
     # Authenticate: Bearer token OR API key required
     authenticated = False
     if bearer_token:
-        # Validate Bearer token (for now, use same validation as API key)
-        # In production, implement proper JWT validation
-        if bearer_token == settings.ALG_API_KEY:
+        if bearer_token == expected_api_key:
             authenticated = True
     elif x_api_key:
-        # Validate API key
-        if x_api_key == settings.ALG_API_KEY:
+        if x_api_key == expected_api_key:
             authenticated = True
-    
+
     if not authenticated:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, 
+            status_code=status.HTTP_401_UNAUTHORIZED,
             detail={"code": "UNAUTHORIZED", "message": "Invalid or missing authentication"}
         )
-    
+
     # Require X-Tenant-ID header
     if not x_tenant_id:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, 
+            status_code=status.HTTP_400_BAD_REQUEST,
             detail={"code": "MISSING_TENANT", "message": "Missing X-Tenant-ID header"}
         )
-    
+
     # Enforce rate limiting
-    _enforce_rate_limit(x_tenant_id)
-    
+    await _enforce_rate_limit(request, x_tenant_id)
+
     # Store context in request state
     request.state.tenant_id = x_tenant_id
-    
+
     # Determine API version (prefer x-extend-api-version, fallback to x-api-version)
     api_version = x_extend_api_version or x_api_version or "2025-04-21"  # Default version
     request.state.api_version = api_version
-    
+
     return {
         "tenant": x_tenant_id,
         "api_version": api_version
@@ -487,19 +548,19 @@ async def _run_extraction(
             raise HTTPException(
                 status_code=status.HTTP_501_NOT_IMPLEMENTED,
                 detail={
-                    "code": "CLOUD_STORAGE_NOT_IMPLEMENTED", 
+                    "code": "CLOUD_STORAGE_NOT_IMPLEMENTED",
                     "message": f"Cloud storage paths not yet supported: {path}",
                     "supported_schemes": ["file://", "local paths"]
                 }
             )
-        
+
         # Use anyio with timeout for graceful handling
         with anyio.move_on_after(timeout_sec) as cancel_scope:
             records, warnings = await anyio.to_thread.run_sync(_execute)
-        
+
         if cancel_scope.cancelled_caught:
             raise TimeoutError(f"Extraction timed out after {timeout_sec} seconds")
-            
+
     except Exception as exc:
         elapsed = time.perf_counter() - start
         # Convert to structured error
@@ -511,7 +572,7 @@ async def _run_extraction(
                 "processing_notes": f"Failed after {elapsed:.2f}s: {type(exc).__name__}"
             }
         ) from exc
-    
+
     elapsed = time.perf_counter() - start
     return records, warnings, elapsed
 
@@ -551,7 +612,7 @@ async def _maybe_send_webhook(job: JobRecord) -> None:
     """Send webhook notification if configured."""
     if not job.webhook_url or job.result is None:
         return
-    
+
     payload = {
         "job_id": job.job_id,
         "tenant_id": job.tenant_id,
@@ -560,7 +621,7 @@ async def _maybe_send_webhook(job: JobRecord) -> None:
         "duration_sec": job.duration_sec,
         "request_id": job.request_id,
     }
-    
+
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             await client.post(str(job.webhook_url), json=payload)
@@ -578,15 +639,37 @@ async def _maybe_send_webhook(job: JobRecord) -> None:
         )
 
 
-async def _execute_job(job_id: str, payload: JobCreate, tenant_id: str, request_id: Optional[str]) -> None:
+def _background_job_db_to_record(job_db) -> JobRecord:
+    """Convert durable BackgroundJobDB row to JobRecord schema."""
+    result_payload = job_db.result if isinstance(job_db.result, dict) else None
+    result = ExtractResponse(**result_payload) if result_payload else None
+    return JobRecord(
+        job_id=job_db.id,
+        status=job_db.status,
+        tenant_id=job_db.tenant_id,
+        request_id=job_db.request_id,
+        created_at=job_db.created_at,
+        updated_at=job_db.updated_at,
+        webhook_url=job_db.webhook_url,
+        result=result,
+        error=job_db.error,
+        duration_sec=job_db.duration_sec,
+    )
+
+
+async def _execute_job(
+    job_id: str,
+    payload: JobCreate,
+    tenant_id: str,
+    request_id: Optional[str],
+    job_store: SQLBackgroundJobStore,
+) -> None:
     """Execute a background job."""
     job_logger = get_logger(payload.debug)
-    job = _jobs.get(job_id)
-    if not job:
+    running_job = await job_store.mark_running(job_id=job_id)
+    if not running_job:
         return
 
-    job.status = "running"
-    job.updated_at = _utcnow()
     job_logger.info(
         "Job running",
         extra={"context": {"job_id": job_id, "tenant_id": tenant_id, "request_id": request_id}},
@@ -599,13 +682,15 @@ async def _execute_job(job_id: str, payload: JobCreate, tenant_id: str, request_
             debug=payload.debug,
         )
         result = ExtractResponse(count=len(records), records=records, warnings=warnings)
-        job.result = result
-        job.duration_sec = round(elapsed, 3)
-        job.status = "succeeded"
-        job.updated_at = _utcnow()
-        
-        await _maybe_send_webhook(job)
-        
+        duration_sec = round(elapsed, 3)
+        succeeded_job = await job_store.mark_succeeded(
+            job_id=job_id,
+            result=result.model_dump(mode="json"),
+            duration_sec=duration_sec,
+        )
+        if succeeded_job:
+            await _maybe_send_webhook(_background_job_db_to_record(succeeded_job))
+
         job_logger.info(
             "Job succeeded",
             extra={
@@ -613,15 +698,17 @@ async def _execute_job(job_id: str, payload: JobCreate, tenant_id: str, request_
                     "job_id": job_id,
                     "tenant_id": tenant_id,
                     "records": result.count,
-                    "duration_sec": job.duration_sec,
+                    "duration_sec": duration_sec,
                     "request_id": request_id,
                 }
             },
         )
     except Exception as exc:  # pragma: no cover - defensive catch
-        job.status = "failed"
-        job.error = str(exc)
-        job.updated_at = _utcnow()
+        await job_store.mark_failed(
+            job_id=job_id,
+            error=str(exc),
+            duration_sec=None,
+        )
         job_logger.warning(
             "Job failed",
             extra={
@@ -650,21 +737,34 @@ def build_api() -> FastAPI:
     except ImportError:
         # Database modules not available - tests may provide mocks
         pass
-    
+
+    if async_session_factory is None:
+        raise RuntimeError("Database session factory is required for durable operational state")
+
+    state_backend = _resolve_state_backend()
+    using_memory_operational_state = state_backend == "memory"
+
+    if state_backend == "redis":
+        redis_url = (settings.REDIS_URL or "").strip()
+        if not redis_url:
+            raise RuntimeError("REDIS_URL must be configured when STATE_BACKEND=redis")
+        rate_limit_store = RedisRateLimitStore(redis_url)
+    else:
+        rate_limit_store = InMemoryRateLimitStore()
+
+    idempotency_store = SQLIdempotencyStore(async_session_factory)
+    webhook_replay_store = SQLWebhookReplayStore(async_session_factory)
+    job_store = SQLBackgroundJobStore(async_session_factory)
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         """Manage application lifespan: startup and shutdown."""
         # Startup
         logger = get_logger()
-        
-        # Initialize database tables (only if database is configured)
-        try:
-            if engine is not None and Base is not None:
-                async with engine.begin() as conn:
-                    await conn.run_sync(Base.metadata.create_all)
-        except Exception as e:
-            logger.warning(f"Database initialization skipped or failed: {e}")
-        
+
+        _validate_startup_security_configuration()
+        await _validate_startup_state_configuration(app)
+
         versions = {
             "service": app.version,
         }
@@ -685,20 +785,24 @@ def build_api() -> FastAPI:
                     "rate_per_min": settings.RATE_PER_MIN,
                     "max_file_mb": settings.MAX_FILE_MB,
                     "database_configured": engine is not None,
+                    "schema_management": "alembic",
                 }
             },
         )
-        
+
         yield
-        
+
         # Shutdown
         try:
+            rate_store = getattr(app.state, "rate_limit_store", None)
+            if rate_store is not None:
+                await rate_store.close()
             from vendor_libs.utils.http import close_http_client
             await close_http_client()
             logger.info("HTTP client closed successfully")
         except Exception as e:
             logger.warning(f"Error closing HTTP client: {e}")
-    
+
     app = FastAPI(
         title="PDF Usage Extraction Service",
         version="0.1.0",
@@ -709,12 +813,18 @@ def build_api() -> FastAPI:
         swagger_ui_parameters={"tryItOutEnabled": True},
         generate_unique_id_function=lambda route: f"{route.tags[0]}-{route.name}" if route.tags else route.name,
     )
+    app.state.rate_limit_store = rate_limit_store
+    app.state.idempotency_store = idempotency_store
+    app.state.webhook_replay_store = webhook_replay_store
+    app.state.job_store = job_store
+    app.state.state_backend = state_backend
+    app.state.using_memory_operational_state = using_memory_operational_state
 
     @app.get("/", tags=["health"], summary="Health check", include_in_schema=False)
     async def health() -> dict[str, str]:
         """Lightweight health check for serverless environments."""
         return {"status": "ok"}
-    
+
     # Custom OpenAPI schema with error handling
     @app.get("/openapi.json", include_in_schema=False)
     async def custom_openapi():
@@ -722,21 +832,21 @@ def build_api() -> FastAPI:
         try:
             if app.openapi_schema:
                 return app.openapi_schema
-            
+
             from fastapi.openapi.utils import get_openapi
-            
+
             openapi_schema = get_openapi(
                 title=app.title,
                 version=app.version,
                 description=app.description,
                 routes=app.routes,
             )
-            
+
             # Add custom metadata
             openapi_schema["info"]["x-logo"] = {
                 "url": "https://api.algorythmos.fr/logo.png"
             }
-            
+
             app.openapi_schema = openapi_schema
             return app.openapi_schema
         except Exception as e:
@@ -752,17 +862,28 @@ def build_api() -> FastAPI:
                 "paths": {},
                 "error": str(e)
             }
-    
+
     # Add middleware in correct order (LIFO - last added runs first)
     # CORS must be added LAST so it runs FIRST and wraps all responses
-    
+
     # Production middlewares (added first, run after CORS)
-    app.add_middleware(RateLimitMiddleware, requests_per_minute=60, requests_per_hour=1000)
-    app.add_middleware(IdempotencyMiddleware, ttl_seconds=86400)  # 24 hours
+    app.add_middleware(
+        RateLimitMiddleware,
+        rate_limit_store=rate_limit_store,
+        requests_per_minute=60,
+        requests_per_hour=1000,
+        fail_closed=_is_production_environment(),
+    )
+    app.add_middleware(
+        IdempotencyMiddleware,
+        idempotency_store=idempotency_store,
+        ttl_seconds=settings.IDEMPOTENCY_TTL_S,
+        fail_closed=_is_production_environment(),
+    )
     app.add_middleware(MetricsMiddleware)
     app.add_middleware(FileSizeMiddleware)
     app.add_middleware(RequestContextMiddleware)
-    
+
     # CORS middleware added LAST so it runs FIRST (outermost wrapper)
     origins = settings.get_cors_origins()
     app.add_middleware(
@@ -773,7 +894,7 @@ def build_api() -> FastAPI:
         allow_headers=["Authorization", "Content-Type", "Idempotency-Key", "X-Request-ID", "X-API-Key", "X-Tenant-Id", "*"],
         expose_headers=["X-Request-ID"],
     )
-    
+
     # Global router instance and logger
     global router_engine
     router_engine = ExtractionRouter()
@@ -785,7 +906,7 @@ def build_api() -> FastAPI:
         """Health check endpoint."""
         return {"status": "ok"}
 
-    # Version endpoint (public) 
+    # Version endpoint (public)
     @app.get("/version", tags=["health"])
     async def version() -> dict[str, str]:
         """Get service version and environment information."""
@@ -805,7 +926,7 @@ def build_api() -> FastAPI:
             return response
         except Exception:  # pragma: no cover - fallback if metadata unavailable
             return {
-                "app": "api-algorythmos", 
+                "app": "api-algorythmos",
                 "env": settings.ENV,
                 "service": app.version
             }
@@ -828,7 +949,7 @@ def build_api() -> FastAPI:
         return await metrics_app()()
 
     # ==================== AUTHENTICATION ENDPOINTS ====================
-    
+
     @app.post(
         "/auth/google",
         status_code=status.HTTP_200_OK,
@@ -843,37 +964,41 @@ def build_api() -> FastAPI:
     async def auth_google(
         authorization: str = Header(..., description="Bearer <token>"),
     ):
-        """
-        Authenticate user (simplified - accepts any valid Bearer token for now).
-        
-        Production TODO: Add Google token verification via google-auth library.
-        """
+        """Authenticate user by verifying a Google ID token."""
         # Extract token from Bearer header
         if not authorization.startswith("Bearer "):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail={"code": "INVALID_AUTH_HEADER", "message": "Authorization header must be 'Bearer <token>'"},
             )
-        
-        token = authorization[7:]  # Strip "Bearer " prefix
-        
-        # For now, just accept any non-empty token
-        if not token or len(token) < 10:
+
+        token = authorization[7:].strip()  # Strip "Bearer " prefix
+
+        if not token:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail={"code": "INVALID_TOKEN", "message": "Token too short or missing"},
+                detail={"code": "INVALID_TOKEN", "message": "Token missing"},
             )
-        
-        # Return success - frontend can proceed
+
+        from app.auth.google_auth import GoogleAuthError, verify_google_token
+
+        try:
+            verify_google_token(token, client_id=settings.GOOGLE_CLIENT_ID)
+        except GoogleAuthError:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={"code": "INVALID_TOKEN", "message": "Google token verification failed"},
+            )
+
         return {"status": "ok"}
 
     # ==================== API KEY MANAGEMENT ENDPOINTS ====================
-    
+
     # Pydantic models for API key endpoints
     class CreateApiKeyRequest(BaseModel):
         """Request to create a new API key."""
         name: str = Field(..., min_length=1, max_length=100, description="Name for the API key")
-    
+
     class ApiKeyResponse(BaseModel):
         """API key info returned in list responses (no raw key)."""
         id: str
@@ -881,7 +1006,7 @@ def build_api() -> FastAPI:
         prefix: str
         created_at: datetime
         last_used_at: Optional[datetime] = None
-    
+
     class CreateApiKeyResponse(BaseModel):
         """Response when creating a new API key (includes raw key once)."""
         id: str
@@ -889,34 +1014,34 @@ def build_api() -> FastAPI:
         prefix: str
         created_at: datetime
         raw_key: str  # Only returned on creation!
-    
+
     # Constants for API keys
     API_KEY_PREFIX = "alg_"
     MAX_KEYS_PER_USER = 10
-    
+
     def generate_api_key() -> tuple[str, str, str]:
         """
         Generate a new API key.
-        
+
         Returns:
             Tuple of (raw_key, key_hash, prefix)
         """
         # Generate 32 random URL-safe characters
         random_part = secrets.token_urlsafe(32)
         raw_key = f"{API_KEY_PREFIX}{random_part}"
-        
+
         # Hash the key with SHA-256
         key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
-        
+
         # Prefix for display (alg_ + first 8 chars of random part)
         prefix = f"{API_KEY_PREFIX}{random_part[:8]}"
-        
+
         return raw_key, key_hash, prefix
-    
+
     def hash_api_key(raw_key: str) -> str:
         """Hash an API key for lookup."""
         return hashlib.sha256(raw_key.encode()).hexdigest()
-    
+
     async def get_current_user_from_token(
         authorization: Optional[str],
         session: AsyncSession,
@@ -927,24 +1052,24 @@ def build_api() -> FastAPI:
         """
         if not authorization or not authorization.startswith("Bearer "):
             return None
-        
-        token = authorization[7:]
-        if not token or len(token) < 10:
+
+        token = authorization[7:].strip()
+        if not token:
             return None
-        
+
         # Import UserDB model
         from models_user import UserDB
-        
+
         # For now, simplified: look up user by a query
         # In production, verify Google token and extract email/sub
         # Then look up user by provider_account_id or email
-        
+
         # Since we don't have full Google verification here,
         # we'll need to verify the token using google-auth
         try:
-            from app.auth.google_auth import verify_google_token
-            user_info = verify_google_token(token)
-            
+            from app.auth.google_auth import GoogleAuthError, verify_google_token
+            user_info = verify_google_token(token, client_id=settings.GOOGLE_CLIENT_ID)
+
             # Find user by email
             result = await session.execute(
                 select(UserDB).where(
@@ -953,7 +1078,7 @@ def build_api() -> FastAPI:
                 )
             )
             user = result.scalar_one_or_none()
-            
+
             if not user:
                 # Create user if not exists (first login)
                 user = UserDB(
@@ -967,11 +1092,13 @@ def build_api() -> FastAPI:
                 session.add(user)
                 await session.commit()
                 await session.refresh(user)
-            
+
             return user
+        except GoogleAuthError:
+            return None
         except Exception:
             return None
-    
+
     async def get_user_from_api_key(
         api_key: str,
         session: AsyncSession,
@@ -982,12 +1109,12 @@ def build_api() -> FastAPI:
         """
         if not api_key or not api_key.startswith(API_KEY_PREFIX):
             return None
-        
+
         from models_api_key import ApiKeyDB
         from models_user import UserDB
-        
+
         key_hash = hash_api_key(api_key)
-        
+
         # Find the API key
         result = await session.execute(
             select(ApiKeyDB).where(
@@ -996,14 +1123,14 @@ def build_api() -> FastAPI:
             )
         )
         api_key_record = result.scalar_one_or_none()
-        
+
         if not api_key_record:
             return None
-        
+
         # Update last_used_at
         api_key_record.last_used_at = datetime.now(timezone.utc)
         await session.commit()
-        
+
         # Get the associated user
         result = await session.execute(
             select(UserDB).where(
@@ -1012,7 +1139,7 @@ def build_api() -> FastAPI:
             )
         )
         return result.scalar_one_or_none()
-    
+
     async def require_authenticated_user(
         request: Request,
         authorization: Optional[str] = Header(default=None),
@@ -1021,38 +1148,38 @@ def build_api() -> FastAPI:
     ) -> "UserDB":
         """
         Dual authentication dependency.
-        
+
         Priority:
         1. Authorization: Bearer <token> (Google ID token)
         2. X-API-Key: alg_... (API key)
-        
+
         Returns the authenticated User object.
         Raises 401 if neither method succeeds.
         """
         from models_user import UserDB
-        
+
         user = None
-        
+
         # Try Bearer token first
         if authorization:
             user = await get_current_user_from_token(authorization, session)
-        
+
         # If no user from token, try API key
         if not user and x_api_key:
             user = await get_user_from_api_key(x_api_key, session)
-        
+
         if not user:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail={"code": "UNAUTHORIZED", "message": "Invalid or missing authentication"},
             )
-        
+
         # Store user in request state for downstream use
         request.state.user = user
         request.state.tenant_id = user.email.split("@")[-1] if user.email else "default"
-        
+
         return user
-    
+
     @app.post(
         "/auth/keys",
         response_model=CreateApiKeyResponse,
@@ -1074,7 +1201,7 @@ def build_api() -> FastAPI:
     ) -> CreateApiKeyResponse:
         """Create a new API key for the authenticated user."""
         from models_api_key import ApiKeyDB
-        
+
         # Check key limit
         result = await session.execute(
             select(func.count(ApiKeyDB.id)).where(
@@ -1083,7 +1210,7 @@ def build_api() -> FastAPI:
             )
         )
         key_count = result.scalar() or 0
-        
+
         if key_count >= MAX_KEYS_PER_USER:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -1092,10 +1219,10 @@ def build_api() -> FastAPI:
                     "message": f"Maximum of {MAX_KEYS_PER_USER} API keys per user. Please revoke an existing key first."
                 },
             )
-        
+
         # Generate the key
         raw_key, key_hash, prefix = generate_api_key()
-        
+
         # Create the record
         api_key = ApiKeyDB(
             id=str(uuid4()),
@@ -1107,7 +1234,7 @@ def build_api() -> FastAPI:
         session.add(api_key)
         await session.commit()
         await session.refresh(api_key)
-        
+
         logger.info(
             "API key created",
             extra={
@@ -1119,7 +1246,7 @@ def build_api() -> FastAPI:
                 }
             }
         )
-        
+
         return CreateApiKeyResponse(
             id=api_key.id,
             name=api_key.name,
@@ -1127,7 +1254,7 @@ def build_api() -> FastAPI:
             created_at=api_key.created_at,
             raw_key=raw_key,  # Only returned on creation!
         )
-    
+
     @app.get(
         "/auth/keys",
         response_model=List[ApiKeyResponse],
@@ -1142,7 +1269,7 @@ def build_api() -> FastAPI:
     ) -> List[ApiKeyResponse]:
         """List all API keys for the authenticated user."""
         from models_api_key import ApiKeyDB
-        
+
         result = await session.execute(
             select(ApiKeyDB)
             .where(
@@ -1152,7 +1279,7 @@ def build_api() -> FastAPI:
             .order_by(ApiKeyDB.created_at.desc())
         )
         keys = result.scalars().all()
-        
+
         return [
             ApiKeyResponse(
                 id=key.id,
@@ -1163,7 +1290,7 @@ def build_api() -> FastAPI:
             )
             for key in keys
         ]
-    
+
     @app.delete(
         "/auth/keys/{key_id}",
         status_code=status.HTTP_204_NO_CONTENT,
@@ -1183,7 +1310,7 @@ def build_api() -> FastAPI:
     ):
         """Revoke an API key (soft delete)."""
         from models_api_key import ApiKeyDB
-        
+
         result = await session.execute(
             select(ApiKeyDB).where(
                 ApiKeyDB.id == key_id,
@@ -1192,17 +1319,17 @@ def build_api() -> FastAPI:
             )
         )
         api_key = result.scalar_one_or_none()
-        
+
         if not api_key:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail={"code": "NOT_FOUND", "message": "API key not found"},
             )
-        
+
         # Soft delete
         api_key.is_active = False
         await session.commit()
-        
+
         logger.info(
             "API key revoked",
             extra={
@@ -1213,12 +1340,12 @@ def build_api() -> FastAPI:
                 }
             }
         )
-        
+
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
-    
+
     # ==================== GENERIC DOCUMENT PROCESSING ENDPOINTS ====================
-    
+
     # Schema Management Endpoints
     @app.post(
         "/schemas",
@@ -1236,7 +1363,7 @@ def build_api() -> FastAPI:
     ) -> ExtractionSchema:
         """Create a new extraction schema."""
         tenant_id = tenant_ctx["tenant"]
-        
+
         try:
             schema = await SchemaService.create_schema(
                 session=session,
@@ -1261,7 +1388,7 @@ def build_api() -> FastAPI:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=build_error_response("validation_error", str(e))
             )
-    
+
     @app.get(
         "/schemas",
         tags=["schemas"],
@@ -1277,21 +1404,21 @@ def build_api() -> FastAPI:
     ):
         """List extraction schemas."""
         from core.config import build_pagination_meta
-        
+
         tenant_id = tenant_ctx["tenant"]
-        
+
         items, total = await SchemaService.list_schemas(
             session=session,
             tenant_id=tenant_id,
             limit=limit,
             offset=offset,
         )
-        
+
         return {
             "items": items,
             "meta": build_pagination_meta(limit, offset, total)
         }
-    
+
     @app.get(
         "/schemas/{schema_id}",
         response_model=ExtractionSchema,
@@ -1307,23 +1434,23 @@ def build_api() -> FastAPI:
     ) -> ExtractionSchema:
         """Get schema by ID."""
         from core.config import build_error_response
-        
+
         tenant_id = tenant_ctx["tenant"]
-        
+
         schema = await SchemaService.get_schema(
             session=session,
             tenant_id=tenant_id,
             schema_id=schema_id,
         )
-        
+
         if not schema:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=build_error_response("resource_not_found", f"Schema '{schema_id}' not found")
             )
-        
+
         return schema
-    
+
     @app.patch(
         "/schemas/{schema_id}",
         response_model=ExtractionSchema,
@@ -1340,9 +1467,9 @@ def build_api() -> FastAPI:
     ) -> ExtractionSchema:
         """Update an existing schema."""
         from core.config import build_error_response
-        
+
         tenant_id = tenant_ctx["tenant"]
-        
+
         try:
             schema = await SchemaService.update_schema(
                 session=session,
@@ -1350,13 +1477,13 @@ def build_api() -> FastAPI:
                 schema_id=schema_id,
                 request=payload,
             )
-            
+
             if not schema:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail=build_error_response("resource_not_found", f"Schema '{schema_id}' not found")
                 )
-            
+
             logger.info(
                 "Schema updated",
                 extra={
@@ -1374,7 +1501,7 @@ def build_api() -> FastAPI:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=build_error_response("validation_error", str(e))
             )
-    
+
     @app.delete(
         "/schemas/{schema_id}",
         status_code=status.HTTP_204_NO_CONTENT,
@@ -1390,21 +1517,21 @@ def build_api() -> FastAPI:
     ) -> Response:
         """Delete a schema."""
         from core.config import build_error_response
-        
+
         tenant_id = tenant_ctx["tenant"]
-        
+
         deleted = await SchemaService.delete_schema(
             session=session,
             tenant_id=tenant_id,
             schema_id=schema_id,
         )
-        
+
         if not deleted:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=build_error_response("resource_not_found", f"Schema '{schema_id}' not found")
             )
-        
+
         logger.info(
             "Schema deleted",
             extra={
@@ -1414,7 +1541,7 @@ def build_api() -> FastAPI:
                 }
             }
         )
-        
+
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     # Extractor Management Endpoints
@@ -1434,7 +1561,7 @@ def build_api() -> FastAPI:
     ) -> ExtractorConfig:
         """Create a new extractor."""
         tenant_id = tenant_ctx["tenant"]
-        
+
         try:
             extractor = await extractor_service.create_extractor(
                 db=session,
@@ -1458,7 +1585,7 @@ def build_api() -> FastAPI:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={"code": "INVALID_EXTRACTOR", "message": str(e)}
             )
-    
+
     @app.get(
         "/extractors",
         tags=["extractors"],
@@ -1476,9 +1603,9 @@ def build_api() -> FastAPI:
     ):
         """List extractors for the tenant."""
         from core.config import build_pagination_meta
-        
+
         tenant_id = tenant_ctx["tenant"]
-        
+
         items, total = await extractor_service.list_extractors(
             db=session,
             tenant_id=tenant_id,
@@ -1487,12 +1614,12 @@ def build_api() -> FastAPI:
             schema_id=schema_id,
             enabled=enabled,
         )
-        
+
         return {
             "items": items,
             "meta": build_pagination_meta(limit, offset, total)
         }
-    
+
     @app.get(
         "/extractors/{extractor_id}",
         response_model=ExtractorConfig,
@@ -1508,21 +1635,21 @@ def build_api() -> FastAPI:
     ) -> ExtractorConfig:
         """Get an extractor by ID."""
         tenant_id = tenant_ctx["tenant"]
-        
+
         extractor = await extractor_service.get_extractor(
             db=session,
             tenant_id=tenant_id,
             extractor_id=extractor_id,
         )
-        
+
         if not extractor:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail={"code": "EXTRACTOR_NOT_FOUND", "message": f"Extractor '{extractor_id}' not found"}
             )
-        
+
         return extractor
-    
+
     @app.patch(
         "/extractors/{extractor_id}",
         response_model=ExtractorConfig,
@@ -1539,20 +1666,20 @@ def build_api() -> FastAPI:
     ) -> ExtractorConfig:
         """Update an extractor."""
         tenant_id = tenant_ctx["tenant"]
-        
+
         extractor = await extractor_service.update_extractor(
             db=session,
             tenant_id=tenant_id,
             extractor_id=extractor_id,
             request=payload,
         )
-        
+
         if not extractor:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail={"code": "EXTRACTOR_NOT_FOUND", "message": f"Extractor '{extractor_id}' not found"}
             )
-        
+
         logger.info(
             "Extractor updated",
             extra={
@@ -1563,9 +1690,9 @@ def build_api() -> FastAPI:
                 }
             }
         )
-        
+
         return extractor
-    
+
     @app.delete(
         "/extractors/{extractor_id}",
         status_code=status.HTTP_204_NO_CONTENT,
@@ -1581,19 +1708,19 @@ def build_api() -> FastAPI:
     ):
         """Delete an extractor."""
         tenant_id = tenant_ctx["tenant"]
-        
+
         deleted = await extractor_service.delete_extractor(
             db=session,
             tenant_id=tenant_id,
             extractor_id=extractor_id,
         )
-        
+
         if not deleted:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail={"code": "EXTRACTOR_NOT_FOUND", "message": f"Extractor '{extractor_id}' not found"}
             )
-        
+
         logger.info(
             "Extractor deleted",
             extra={
@@ -1603,7 +1730,7 @@ def build_api() -> FastAPI:
                 }
             }
         )
-        
+
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     # Classifier Management Endpoints
@@ -1623,7 +1750,7 @@ def build_api() -> FastAPI:
     ) -> ClassifierConfig:
         """Create a new classifier."""
         tenant_id = tenant_ctx["tenant"]
-        
+
         try:
             classifier = await classifier_service.create_classifier(
                 db=session,
@@ -1646,7 +1773,7 @@ def build_api() -> FastAPI:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={"code": "INVALID_CLASSIFIER", "message": str(e)}
             )
-    
+
     @app.get(
         "/classifiers",
         tags=["classifiers"],
@@ -1663,9 +1790,9 @@ def build_api() -> FastAPI:
     ):
         """List classifiers for the tenant."""
         from core.config import build_pagination_meta
-        
+
         tenant_id = tenant_ctx["tenant"]
-        
+
         items, total = await classifier_service.list_classifiers(
             db=session,
             tenant_id=tenant_id,
@@ -1673,12 +1800,12 @@ def build_api() -> FastAPI:
             offset=offset,
             enabled=enabled,
         )
-        
+
         return {
             "items": items,
             "meta": build_pagination_meta(limit, offset, total)
         }
-    
+
     @app.get(
         "/classifiers/{classifier_id}",
         response_model=ClassifierConfig,
@@ -1694,21 +1821,21 @@ def build_api() -> FastAPI:
     ) -> ClassifierConfig:
         """Get a classifier by ID."""
         tenant_id = tenant_ctx["tenant"]
-        
+
         classifier = await classifier_service.get_classifier(
             db=session,
             tenant_id=tenant_id,
             classifier_id=classifier_id,
         )
-        
+
         if not classifier:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail={"code": "CLASSIFIER_NOT_FOUND", "message": f"Classifier '{classifier_id}' not found"}
             )
-        
+
         return classifier
-    
+
     @app.patch(
         "/classifiers/{classifier_id}",
         response_model=ClassifierConfig,
@@ -1725,20 +1852,20 @@ def build_api() -> FastAPI:
     ) -> ClassifierConfig:
         """Update a classifier."""
         tenant_id = tenant_ctx["tenant"]
-        
+
         classifier = await classifier_service.update_classifier(
             db=session,
             tenant_id=tenant_id,
             classifier_id=classifier_id,
             request=payload,
         )
-        
+
         if not classifier:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail={"code": "CLASSIFIER_NOT_FOUND", "message": f"Classifier '{classifier_id}' not found"}
             )
-        
+
         logger.info(
             "Classifier updated",
             extra={
@@ -1749,9 +1876,9 @@ def build_api() -> FastAPI:
                 }
             }
         )
-        
+
         return classifier
-    
+
     @app.delete(
         "/classifiers/{classifier_id}",
         status_code=status.HTTP_204_NO_CONTENT,
@@ -1767,19 +1894,19 @@ def build_api() -> FastAPI:
     ):
         """Delete a classifier."""
         tenant_id = tenant_ctx["tenant"]
-        
+
         deleted = await classifier_service.delete_classifier(
             db=session,
             tenant_id=tenant_id,
             classifier_id=classifier_id,
         )
-        
+
         if not deleted:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail={"code": "CLASSIFIER_NOT_FOUND", "message": f"Classifier '{classifier_id}' not found"}
             )
-        
+
         logger.info(
             "Classifier deleted",
             extra={
@@ -1789,7 +1916,7 @@ def build_api() -> FastAPI:
                 }
             }
         )
-        
+
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     # Splitter Management Endpoints
@@ -1809,7 +1936,7 @@ def build_api() -> FastAPI:
     ) -> SplitterConfig:
         """Create a new splitter."""
         tenant_id = tenant_ctx["tenant"]
-        
+
         try:
             splitter = await splitter_service.create_splitter(
                 db=session,
@@ -1832,7 +1959,7 @@ def build_api() -> FastAPI:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={"code": "INVALID_SPLITTER", "message": str(e)}
             )
-    
+
     @app.get(
         "/splitters",
         tags=["splitters"],
@@ -1849,9 +1976,9 @@ def build_api() -> FastAPI:
     ):
         """List splitters for the tenant."""
         from core.config import build_pagination_meta
-        
+
         tenant_id = tenant_ctx["tenant"]
-        
+
         items, total = await splitter_service.list_splitters(
             db=session,
             tenant_id=tenant_id,
@@ -1859,12 +1986,12 @@ def build_api() -> FastAPI:
             offset=offset,
             enabled=enabled,
         )
-        
+
         return {
             "items": items,
             "meta": build_pagination_meta(limit, offset, total)
         }
-    
+
     @app.get(
         "/splitters/{splitter_id}",
         response_model=SplitterConfig,
@@ -1880,21 +2007,21 @@ def build_api() -> FastAPI:
     ) -> SplitterConfig:
         """Get a splitter by ID."""
         tenant_id = tenant_ctx["tenant"]
-        
+
         splitter = await splitter_service.get_splitter(
             db=session,
             tenant_id=tenant_id,
             splitter_id=splitter_id,
         )
-        
+
         if not splitter:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail={"code": "SPLITTER_NOT_FOUND", "message": f"Splitter '{splitter_id}' not found"}
             )
-        
+
         return splitter
-    
+
     @app.patch(
         "/splitters/{splitter_id}",
         response_model=SplitterConfig,
@@ -1911,20 +2038,20 @@ def build_api() -> FastAPI:
     ) -> SplitterConfig:
         """Update a splitter."""
         tenant_id = tenant_ctx["tenant"]
-        
+
         splitter = await splitter_service.update_splitter(
             db=session,
             tenant_id=tenant_id,
             splitter_id=splitter_id,
             request=payload,
         )
-        
+
         if not splitter:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail={"code": "SPLITTER_NOT_FOUND", "message": f"Splitter '{splitter_id}' not found"}
             )
-        
+
         logger.info(
             "Splitter updated",
             extra={
@@ -1935,9 +2062,9 @@ def build_api() -> FastAPI:
                 }
             }
         )
-        
+
         return splitter
-    
+
     @app.delete(
         "/splitters/{splitter_id}",
         status_code=status.HTTP_204_NO_CONTENT,
@@ -1953,19 +2080,19 @@ def build_api() -> FastAPI:
     ):
         """Delete a splitter."""
         tenant_id = tenant_ctx["tenant"]
-        
+
         deleted = await splitter_service.delete_splitter(
             db=session,
             tenant_id=tenant_id,
             splitter_id=splitter_id,
         )
-        
+
         if not deleted:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail={"code": "SPLITTER_NOT_FOUND", "message": f"Splitter '{splitter_id}' not found"}
             )
-        
+
         logger.info(
             "Splitter deleted",
             extra={
@@ -1975,11 +2102,11 @@ def build_api() -> FastAPI:
                 }
             }
         )
-        
+
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     # === PHASE 2: Regex Extraction Endpoint ===
-    
+
     @app.post(
         "/extract/regex",
         tags=["extraction"],
@@ -1996,15 +2123,15 @@ def build_api() -> FastAPI:
     ):
         """
         Extract structured fields from text using regex patterns.
-        
+
         Uses extraction schemas to define fields and patterns for extraction.
         Returns extracted values with confidence scores and citations.
         """
         from core.config import build_error_response
         from document_processing.services import regex_extractor_service
-        
+
         tenant_id = tenant_ctx["tenant"]
-        
+
         try:
             result = await regex_extractor_service.extract_with_schema(
                 db=session,
@@ -2013,7 +2140,7 @@ def build_api() -> FastAPI:
                 text=text,
                 extractor_id=extractor_id
             )
-            
+
             logger.info(
                 "Regex extraction completed",
                 extra={
@@ -2026,9 +2153,9 @@ def build_api() -> FastAPI:
                     }
                 }
             )
-            
+
             return result
-            
+
         except ValueError as e:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -2052,7 +2179,7 @@ def build_api() -> FastAPI:
             )
 
     # === PHASE 3: Classification Endpoint ===
-    
+
     @app.post(
         "/classify",
         tags=["classification"],
@@ -2068,15 +2195,15 @@ def build_api() -> FastAPI:
     ):
         """
         Classify document text into categories.
-        
+
         Uses classifier configurations with keyword matching to determine document categories.
         Returns classifications with confidence scores and matched keywords.
         """
         from core.config import build_error_response
         from document_processing.services import classification_service
-        
+
         tenant_id = tenant_ctx["tenant"]
-        
+
         try:
             result = await classification_service.classify_document(
                 db=session,
@@ -2084,7 +2211,7 @@ def build_api() -> FastAPI:
                 text=text,
                 classifier_id=classifier_id
             )
-            
+
             logger.info(
                 "Document classification completed",
                 extra={
@@ -2097,9 +2224,9 @@ def build_api() -> FastAPI:
                     }
                 }
             )
-            
+
             return result
-            
+
         except ValueError as e:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -2123,7 +2250,7 @@ def build_api() -> FastAPI:
             )
 
     # === PHASE 3: Splitting Endpoint ===
-    
+
     @app.post(
         "/split",
         tags=["splitting"],
@@ -2139,15 +2266,15 @@ def build_api() -> FastAPI:
     ):
         """
         Split document text into chunks.
-        
+
         Uses splitter configurations with various strategies (delimiter, pattern, fixed_size, paragraph)
         to split documents into manageable chunks. Returns chunks with position metadata.
         """
         from core.config import build_error_response
         from document_processing.services import splitting_service
-        
+
         tenant_id = tenant_ctx["tenant"]
-        
+
         try:
             result = await splitting_service.split_document(
                 db=session,
@@ -2155,7 +2282,7 @@ def build_api() -> FastAPI:
                 text=text,
                 splitter_id=splitter_id
             )
-            
+
             logger.info(
                 "Document splitting completed",
                 extra={
@@ -2168,9 +2295,9 @@ def build_api() -> FastAPI:
                     }
                 }
             )
-            
+
             return result
-            
+
         except ValueError as e:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -2209,11 +2336,12 @@ def build_api() -> FastAPI:
         request: Request,
         file: UploadFile = File(..., description="File to upload"),
         metadata: Optional[Dict[str, Any]] = Body(None, description="Additional file metadata"),
-        tenant_ctx: Dict[str, str] = Depends(require_key)
+        tenant_ctx: Dict[str, str] = Depends(require_key),
+        session = Depends(get_session),
     ) -> FileUpload:
         """Upload a file and store it for processing."""
         tenant_id = tenant_ctx["tenant"]
-        
+
         try:
             logger.info(
                 "File upload started",
@@ -2225,26 +2353,25 @@ def build_api() -> FastAPI:
                     }
                 }
             )
-            
-            async with request.app.state.db_session() as session:
-                file_upload = await file_service.upload_file(
-                    session, tenant_id, file, metadata
-                )
-                
-                logger.info(
-                    "File uploaded successfully",
-                    extra={
-                        "context": {
-                            "file_id": file_upload.file_id,
-                            "filename": file_upload.filename,
-                            "size_bytes": file_upload.size_bytes,
-                            "tenant_id": tenant_id,
-                        }
+
+            file_upload = await file_service.upload_file(
+                session, tenant_id, file, metadata
+            )
+
+            logger.info(
+                "File uploaded successfully",
+                extra={
+                    "context": {
+                        "file_id": file_upload.file_id,
+                        "filename": file_upload.filename,
+                        "size_bytes": file_upload.size_bytes,
+                        "tenant_id": tenant_id,
                     }
-                )
-                
-                return file_upload
-                
+                }
+            )
+
+            return file_upload
+
         except Exception as e:
             logger.error(
                 "File upload failed",
@@ -2273,20 +2400,19 @@ def build_api() -> FastAPI:
         request: Request,
         limit: int = Query(50, ge=1, le=100, description="Maximum number of results"),
         offset: int = Query(0, ge=0, description="Number of results to skip"),
-        tenant_ctx: Dict[str, str] = Depends(require_key)
+        tenant_ctx: Dict[str, str] = Depends(require_key),
+        session = Depends(get_session),
     ) -> Dict[str, Any]:
         """List files for the tenant."""
         tenant_id = tenant_ctx["tenant"]
-        
-        async with request.app.state.db_session() as session:
-            files, total = await file_service.list_files(session, tenant_id, limit, offset)
-            
-            meta = build_pagination_meta(limit, offset, total)
-            
-            return {
-                "items": [f.model_dump() for f in files],
-                "meta": meta
-            }
+        files, total = await file_service.list_files(session, tenant_id, limit, offset)
+
+        meta = build_pagination_meta(limit, offset, total)
+
+        return {
+            "items": [f.model_dump() for f in files],
+            "meta": meta
+        }
 
     @app.get(
         "/files/{file_id}",
@@ -2298,30 +2424,29 @@ def build_api() -> FastAPI:
     async def get_file_endpoint(
         request: Request,
         file_id: str = PathParam(..., description="File ID"),
-        tenant_ctx: Dict[str, str] = Depends(require_key)
+        tenant_ctx: Dict[str, str] = Depends(require_key),
+        session = Depends(get_session),
     ) -> FileUpload:
         """Get file metadata."""
         tenant_id = tenant_ctx["tenant"]
-        
-        async with request.app.state.db_session() as session:
-            file_db = await file_service.get_file(session, tenant_id, file_id)
-            
-            if not file_db:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=build_error_response("FILE_NOT_FOUND", f"File not found: {file_id}")
-                )
-            
-            return FileUpload(
-                file_id=file_db.id,
-                filename=file_db.filename,
-                content_type=file_db.content_type,
-                size_bytes=file_db.size_bytes,
-                checksum=file_db.checksum,
-                tenant_id=file_db.tenant_id,
-                created_at=file_db.created_at,
-                metadata=file_db.file_metadata
+        file_db = await file_service.get_file(session, tenant_id, file_id)
+
+        if not file_db:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=build_error_response("FILE_NOT_FOUND", f"File not found: {file_id}")
             )
+
+        return FileUpload(
+            file_id=file_db.id,
+            filename=file_db.filename,
+            content_type=file_db.content_type,
+            size_bytes=file_db.size_bytes,
+            checksum=file_db.checksum,
+            tenant_id=file_db.tenant_id,
+            created_at=file_db.created_at,
+            metadata=file_db.file_metadata
+        )
 
     @app.delete(
         "/files/{file_id}",
@@ -2333,21 +2458,20 @@ def build_api() -> FastAPI:
     async def delete_file_endpoint(
         request: Request,
         file_id: str = PathParam(..., description="File ID"),
-        tenant_ctx: Dict[str, str] = Depends(require_key)
+        tenant_ctx: Dict[str, str] = Depends(require_key),
+        session = Depends(get_session),
     ) -> Dict[str, str]:
         """Soft delete a file."""
         tenant_id = tenant_ctx["tenant"]
-        
-        async with request.app.state.db_session() as session:
-            deleted = await file_service.delete_file(session, tenant_id, file_id)
-            
-            if not deleted:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=build_error_response("FILE_NOT_FOUND", f"File not found: {file_id}")
-                )
-            
-            return {"message": "File deleted"}
+        deleted = await file_service.delete_file(session, tenant_id, file_id)
+
+        if not deleted:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=build_error_response("FILE_NOT_FOUND", f"File not found: {file_id}")
+            )
+
+        return {"message": "File deleted"}
 
     @app.post(
         "/parse",
@@ -2360,11 +2484,12 @@ def build_api() -> FastAPI:
     async def parse_document_sync(
         request: Request,
         parse_request: ParserRunRequest,
-        tenant_ctx: Dict[str, str] = Depends(require_key)
+        tenant_ctx: Dict[str, str] = Depends(require_key),
+        session = Depends(get_session),
     ) -> ParseResult:
         """Parse a document synchronously."""
         tenant_id = tenant_ctx["tenant"]
-        
+
         try:
             logger.info(
                 "Synchronous parse started",
@@ -2376,39 +2501,38 @@ def build_api() -> FastAPI:
                     }
                 }
             )
-            
-            async with request.app.state.db_session() as session:
-                # Create run
-                run_status = await parser_service.create_parser_run(
-                    session,
-                    tenant_id,
-                    parse_request.file_id,
-                    parse_request.schema_id,
-                    parse_request.extractor_id,
-                    parse_request.classifier_id,
-                    parse_request.splitter_id,
-                    parse_request.metadata
-                )
-                
-                # Execute immediately
-                result = await parser_service.execute_parser_run(
-                    session, tenant_id, run_status.run_id
-                )
-                
-                logger.info(
-                    "Parse completed",
-                    extra={
-                        "context": {
-                            "run_id": result.run_id,
-                            "status": result.status,
-                            "processing_time_ms": result.processing_time_ms,
-                            "tenant_id": tenant_id,
-                        }
+
+            # Create run
+            run_status = await parser_service.create_parser_run(
+                session,
+                tenant_id,
+                parse_request.file_id,
+                parse_request.schema_id,
+                parse_request.extractor_id,
+                parse_request.classifier_id,
+                parse_request.splitter_id,
+                parse_request.metadata
+            )
+
+            # Execute immediately
+            result = await parser_service.execute_parser_run(
+                session, tenant_id, run_status.run_id
+            )
+
+            logger.info(
+                "Parse completed",
+                extra={
+                    "context": {
+                        "run_id": result.run_id,
+                        "status": result.status,
+                        "processing_time_ms": result.processing_time_ms,
+                        "tenant_id": tenant_id,
                     }
-                )
-                
-                return result
-                
+                }
+            )
+
+            return result
+
         except ValueError as e:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -2442,40 +2566,43 @@ def build_api() -> FastAPI:
     async def parse_document_async(
         request: Request,
         parse_request: ParserRunRequest,
-        tenant_ctx: Dict[str, str] = Depends(require_key)
+        tenant_ctx: Dict[str, str] = Depends(require_key),
+        session = Depends(get_session),
     ) -> ParserRunStatus:
-        """Create an async parser run (actual execution would happen in background worker)."""
+        """Create an async parser run and enqueue durable background execution."""
         tenant_id = tenant_ctx["tenant"]
-        
+
         try:
-            async with request.app.state.db_session() as session:
-                run_status = await parser_service.create_parser_run(
-                    session,
-                    tenant_id,
-                    parse_request.file_id,
-                    parse_request.schema_id,
-                    parse_request.extractor_id,
-                    parse_request.classifier_id,
-                    parse_request.splitter_id,
-                    parse_request.metadata
-                )
-                
-                logger.info(
-                    "Async parse created",
-                    extra={
-                        "context": {
-                            "run_id": run_status.run_id,
-                            "file_id": parse_request.file_id,
-                            "tenant_id": tenant_id,
-                        }
+            run_status = await parser_service.create_parser_run(
+                session,
+                tenant_id,
+                parse_request.file_id,
+                parse_request.schema_id,
+                parse_request.extractor_id,
+                parse_request.classifier_id,
+                parse_request.splitter_id,
+                parse_request.metadata
+            )
+            await parser_service.enqueue_parser_run_job(
+                session,
+                tenant_id,
+                run_status.run_id,
+                max_attempts=settings.PARSE_WORKER_MAX_ATTEMPTS,
+            )
+
+            logger.info(
+                "Async parse queued",
+                extra={
+                    "context": {
+                        "run_id": run_status.run_id,
+                        "file_id": parse_request.file_id,
+                        "tenant_id": tenant_id,
                     }
-                )
-                
-                # In production, would trigger background job here
-                # For now, just return the pending status
-                
-                return run_status
-                
+                }
+            )
+
+            return run_status
+
         except ValueError as e:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -2508,21 +2635,20 @@ def build_api() -> FastAPI:
     async def get_parser_run_endpoint(
         request: Request,
         run_id: str = PathParam(..., description="Parser run ID"),
-        tenant_ctx: Dict[str, str] = Depends(require_key)
+        tenant_ctx: Dict[str, str] = Depends(require_key),
+        session = Depends(get_session),
     ) -> ParserRunStatus:
         """Get parser run status."""
         tenant_id = tenant_ctx["tenant"]
-        
-        async with request.app.state.db_session() as session:
-            run_status = await parser_service.get_parser_run(session, tenant_id, run_id)
-            
-            if not run_status:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=build_error_response("RUN_NOT_FOUND", f"Parser run not found: {run_id}")
-                )
-            
-            return run_status
+        run_status = await parser_service.get_parser_run(session, tenant_id, run_id)
+
+        if not run_status:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=build_error_response("RUN_NOT_FOUND", f"Parser run not found: {run_id}")
+            )
+
+        return run_status
 
     @app.get(
         "/parse",
@@ -2537,22 +2663,21 @@ def build_api() -> FastAPI:
         status_filter: Optional[str] = Query(None, alias="status", description="Filter by status"),
         limit: int = Query(50, ge=1, le=100, description="Maximum number of results"),
         offset: int = Query(0, ge=0, description="Number of results to skip"),
-        tenant_ctx: Dict[str, str] = Depends(require_key)
+        tenant_ctx: Dict[str, str] = Depends(require_key),
+        session = Depends(get_session),
     ) -> Dict[str, Any]:
         """List parser runs."""
         tenant_id = tenant_ctx["tenant"]
-        
-        async with request.app.state.db_session() as session:
-            runs, total = await parser_service.list_parser_runs(
-                session, tenant_id, file_id, status_filter, limit, offset
-            )
-            
-            meta = build_pagination_meta(limit, offset, total)
-            
-            return {
-                "items": [r.model_dump() for r in runs],
-                "meta": meta
-            }
+        runs, total = await parser_service.list_parser_runs(
+            session, tenant_id, file_id, status_filter, limit, offset
+        )
+
+        meta = build_pagination_meta(limit, offset, total)
+
+        return {
+            "items": [r.model_dump() for r in runs],
+            "meta": meta
+        }
 
     # =============================================================================
     # PHASE 5: LLM Processing Endpoints
@@ -2575,11 +2700,11 @@ def build_api() -> FastAPI:
         """Generate document summary using LLM."""
         try:
             from document_processing.services.llm_service import llm_service
-            
+
             result = await llm_service.summarize(text, max_length, style)
-            
+
             return result
-            
+
         except Exception as e:
             logger.error(
                 "LLM summarization failed",
@@ -2607,11 +2732,11 @@ def build_api() -> FastAPI:
         """Extract named entities using LLM."""
         try:
             from document_processing.services.llm_service import llm_service
-            
+
             result = await llm_service.extract_entities(text, entity_types)
-            
+
             return result
-            
+
         except Exception as e:
             logger.error(
                 "LLM entity extraction failed",
@@ -2639,11 +2764,11 @@ def build_api() -> FastAPI:
         """Answer questions about document using LLM."""
         try:
             from document_processing.services.llm_service import llm_service
-            
+
             result = await llm_service.answer_questions(text, questions)
-            
+
             return result
-            
+
         except Exception as e:
             logger.error(
                 "LLM question answering failed",
@@ -2677,13 +2802,13 @@ def build_api() -> FastAPI:
         """Extract usage data from uploaded PDF files."""
         if not files:
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST, 
+                status_code=status.HTTP_400_BAD_REQUEST,
                 detail={"code": "NO_FILES", "message": "No files uploaded"}
             )
 
         with tempfile.TemporaryDirectory(prefix="pdf-extract-") as tmpdir:
             saved_paths: List[str] = []
-            
+
             for index, upload in enumerate(files):
                 # Validate content type
                 if upload.content_type not in {"application/pdf", "application/x-pdf", None}:
@@ -2694,42 +2819,42 @@ def build_api() -> FastAPI:
                             "message": f"Unsupported content type: {upload.content_type}"
                         }
                     )
-                
+
                 original = upload.filename or f"upload-{index}.pdf"
                 filename = os.path.basename(original)
-                
+
                 if not filename.lower().endswith(".pdf"):
                     raise HTTPException(
-                        status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, 
+                        status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
                         detail={
                             "code": "NOT_PDF",
                             "message": f"File is not a PDF: {filename}"
                         }
                     )
-                
+
                 dest = os.path.join(tmpdir, f"{index}_{filename}")
                 content = await upload.read()
-                
+
                 # Check for empty file
                 if not content:
                     raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST, 
+                        status_code=status.HTTP_400_BAD_REQUEST,
                         detail={
                             "code": "EMPTY_FILE",
                             "message": f"Empty file: {filename}"
                         }
                     )
-                
+
                 # Check file size
                 if len(content) > settings.max_file_bytes:
                     raise HTTPException(
-                        status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, 
+                        status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
                         detail={
                             "code": "FILE_TOO_LARGE",
                             "message": f"File exceeds {settings.MAX_FILE_MB} MB limit"
                         }
                     )
-                
+
                 # Save file
                 async with await anyio.open_file(dest, "wb") as fp:
                     await fp.write(content)
@@ -2742,12 +2867,12 @@ def build_api() -> FastAPI:
                 provider_hint=provider_hint,
                 debug=debug,
             )
-            
+
             # Add confidence if missing
             for record in records:
                 if record.confidence is None:
                     record.confidence = 0.0
-            
+
             _log_request(
                 route="/extract/upload",
                 files=len(saved_paths),
@@ -2758,7 +2883,7 @@ def build_api() -> FastAPI:
                 tenant_id=tenant_ctx["tenant"],
                 request_id=getattr(request.state, "request_id", None),
             )
-            
+
             return ExtractResponse(count=len(records), records=records, warnings=warnings)
 
     # Path extraction endpoint (protected)
@@ -2778,7 +2903,7 @@ def build_api() -> FastAPI:
         resolved = os.path.expanduser(payload.input_path)
         if not os.path.exists(resolved):
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST, 
+                status_code=status.HTTP_400_BAD_REQUEST,
                 detail={"code": "PATH_NOT_FOUND", "message": "Input path not found"}
             )
 
@@ -2790,12 +2915,12 @@ def build_api() -> FastAPI:
             )
         except ValueError as exc:
             raise HTTPException(
-                status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, 
+                status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
                 detail={"code": "INVALID_PATH", "message": str(exc)}
             ) from exc
         except FileNotFoundError as exc:
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST, 
+                status_code=status.HTTP_400_BAD_REQUEST,
                 detail={"code": "FILE_NOT_FOUND", "message": str(exc)}
             ) from exc
 
@@ -2807,7 +2932,7 @@ def build_api() -> FastAPI:
         files = 1
         if os.path.isdir(resolved):
             files = sum(1 for _ in Path(resolved).rglob("*.pdf"))
-            
+
         _log_request(
             route="/extract/path",
             files=files,
@@ -2818,7 +2943,7 @@ def build_api() -> FastAPI:
             tenant_id=tenant_ctx["tenant"],
             request_id=getattr(request.state, "request_id", None),
         )
-        
+
         return ExtractResponse(count=len(records), records=records, warnings=warnings)
 
     # Job creation endpoint (protected)
@@ -2835,19 +2960,31 @@ def build_api() -> FastAPI:
         tenant_ctx: Dict[str, str] = Depends(require_key),
     ) -> Dict[str, Any]:
         """Create a background job for processing."""
+        job_store = getattr(request.app.state, "job_store", None)
+        if job_store is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={"code": "JOB_STORE_UNAVAILABLE", "message": "Durable job store is not configured"},
+            )
+
         job_id = str(uuid4())
-        job_record = JobRecord(
+        job_db = await job_store.create_job(
             job_id=job_id,
-            status="queued",
             tenant_id=tenant_ctx["tenant"],
             request_id=getattr(request.state, "request_id", None),
-            created_at=_utcnow(),
-            updated_at=_utcnow(),
-            webhook_url=payload.webhook_url,
+            payload=payload.model_dump(mode="json"),
+            webhook_url=str(payload.webhook_url) if payload.webhook_url else None,
         )
-        _jobs[job_id] = job_record
+        job_record = _background_job_db_to_record(job_db)
 
-        background_tasks.add_task(_execute_job, job_id, payload, tenant_ctx["tenant"], job_record.request_id)
+        background_tasks.add_task(
+            _execute_job,
+            job_id,
+            payload,
+            tenant_ctx["tenant"],
+            job_record.request_id,
+            job_store,
+        )
 
         logger.info(
             "Job queued",
@@ -2869,17 +3006,25 @@ def build_api() -> FastAPI:
         description="Retrieve the status and results of a background processing job.",
     )
     async def get_job(
+        request: Request,
         job_id: str,
         tenant_ctx: Dict[str, str] = Depends(require_key),
     ) -> Dict[str, Any]:
         """Get job status and results."""
-        job = _jobs.get(job_id)
-        if not job or job.tenant_id != tenant_ctx["tenant"]:
+        job_store = getattr(request.app.state, "job_store", None)
+        if job_store is None:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, 
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={"code": "JOB_STORE_UNAVAILABLE", "message": "Durable job store is not configured"},
+            )
+
+        job = await job_store.get_job(job_id=job_id, tenant_id=tenant_ctx["tenant"])
+        if not job:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
                 detail={"code": "JOB_NOT_FOUND", "message": "Job not found"}
             )
-        return job.model_dump(mode="json")
+        return _background_job_db_to_record(job).model_dump(mode="json")
 
     # Algorythmos-style processor endpoints
     @app.post(
@@ -2905,8 +3050,8 @@ def build_api() -> FastAPI:
         db = Depends(get_session),
         files: Optional[List[UploadFile]] = File(None, description="PDF files to process (max 50, max 10MB each)"),
     ) -> Dict[str, Any]:
-        """Create a processor run (Algorythmos-style endpoint). 
-        
+        """Create a processor run (Algorythmos-style endpoint).
+
         Supports two modes:
         1. File upload mode: multipart/form-data with files
         2. Path reference mode: application/json with input_path
@@ -2915,7 +3060,7 @@ def build_api() -> FastAPI:
         content_type = request.headers.get("content-type", "")
         is_json_mode = content_type.startswith("application/json")
         is_multipart_mode = content_type.startswith("multipart/form-data")
-        
+
         # Validate that exactly one input method is provided
         if is_json_mode:
             # Parse JSON body manually
@@ -2955,7 +3100,7 @@ def build_api() -> FastAPI:
                     "message": "Content-Type must be either application/json or multipart/form-data",
                 }
             )
-        
+
         # Log API version if provided
         if x_api_version:
             logger.info(
@@ -3003,7 +3148,7 @@ def build_api() -> FastAPI:
                     "error": existing.error,
                     "vendor_job_id": existing.vendor_job_id,
                 }
-            
+
             # Create placeholder record to claim the idempotency key
             # This prevents race conditions in concurrent requests
             run_id = str(uuid4())
@@ -3068,7 +3213,7 @@ def build_api() -> FastAPI:
                             "message": f"Unsupported content type: {upload.content_type}",
                         }
                     )
-                
+
                 # Read content and validate size
                 content = await upload.read()
                 if len(content) > RUN_MAX_FILE_BYTES:
@@ -3079,7 +3224,7 @@ def build_api() -> FastAPI:
                             "message": f"File exceeds {RUN_MAX_FILE_BYTES} bytes limit",
                         }
                     )
-                
+
                 # Validate PDF magic bytes
                 if not content.startswith(b"%PDF-"):
                     raise HTTPException(
@@ -3089,7 +3234,7 @@ def build_api() -> FastAPI:
                             "message": f"File is not a valid PDF: {upload.filename}",
                         }
                     )
-                
+
                 # Create in-memory file for vendor upload
                 file_data.append({
                     "filename": upload.filename or "upload.pdf",
@@ -3167,10 +3312,10 @@ def build_api() -> FastAPI:
                 }
             },
         )
-        
+
         # Increment run counter
         runs_started.labels(processor=processor_name).inc()
-        
+
         return {
             "id": run.id,
             "processor_name": run.processor,
@@ -3210,13 +3355,13 @@ def build_api() -> FastAPI:
         )
         result = await db.execute(stmt)
         run = result.scalar_one_or_none()
-        
+
         if not run:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, 
+                status_code=status.HTTP_404_NOT_FOUND,
                 detail={"code": "RUN_NOT_FOUND", "message": "Run not found"}
             )
-        
+
         return {
             "id": run.id,
             "processor_name": run.processor,
@@ -3250,7 +3395,7 @@ def build_api() -> FastAPI:
     ) -> Dict[str, Any]:
         """List processor runs with pagination (Algorythmos-style endpoint)."""
         tenant_id = tenant_ctx["tenant"]
-        
+
         # Validate status filter
         valid_statuses = {"queued", "processing", "succeeded", "failed"}
         if status and status not in valid_statuses:
@@ -3261,16 +3406,16 @@ def build_api() -> FastAPI:
                     "message": f"Invalid status filter. Must be one of: {', '.join(valid_statuses)}",
                 },
             )
-        
+
         # Build base query with filters
         conditions = [
             Run.processor == processor_name,
             Run.tenant_id == tenant_id,
         ]
-        
+
         if status:
             conditions.append(Run.status == status)
-        
+
         # Apply cursor for keyset pagination (cursor is created_at ISO timestamp)
         if cursor:
             try:
@@ -3279,9 +3424,9 @@ def build_api() -> FastAPI:
             except (ValueError, AttributeError):
                 # Invalid cursor format, ignore it
                 pass
-        
+
         base_query = select(Run).where(and_(*conditions))
-        
+
         # Get paginated results ordered by created_at DESC (newest first)
         # Fetch limit + 1 to determine if there are more results
         paginated_query = (
@@ -3291,12 +3436,12 @@ def build_api() -> FastAPI:
         )
         result = await db.execute(paginated_query)
         runs = result.scalars().all()
-        
+
         # Check if there are more results
         has_more = len(runs) > limit
         if has_more:
             runs = runs[:limit]
-        
+
         # Format response
         items = [
             {
@@ -3312,15 +3457,15 @@ def build_api() -> FastAPI:
             }
             for run in runs
         ]
-        
+
         # Build response with next_cursor if there are more results
         response: Dict[str, Any] = {"items": items}
-        
+
         if has_more and items:
             # Use the created_at of the last item as the next cursor
             next_cursor = items[-1]["created_at"]
             response["next_cursor"] = next_cursor
-        
+
         return response
 
     @app.patch(
@@ -3352,7 +3497,7 @@ def build_api() -> FastAPI:
                 }
             },
         )
-        
+
         # For now, return success - this would integrate with actual processor management
         return {
             "processor_name": processor_name,
@@ -3410,21 +3555,21 @@ def build_api() -> FastAPI:
                 if f"stage{stage_num}" in secret_lower:
                     strict_legacy_validation = True
                     break
-        
+
         # For v1 signatures, timestamp is embedded in the signature header
         # For legacy signatures (sha256=...), timestamp handling depends on mode
         if sig_info.scheme == "legacy":
             # In strict mode (Stage 5+), legacy format requires timestamp header
             if strict_legacy_validation and not x_vendor_timestamp:
                 return Response(status_code=status.HTTP_401_UNAUTHORIZED)
-            
+
             if x_vendor_timestamp:
                 # If timestamp header provided, validate it
                 try:
                     timestamp = int(x_vendor_timestamp)
                 except (ValueError, TypeError):
                     return Response(status_code=status.HTTP_401_UNAUTHORIZED)
-                
+
                 # Validate timestamp is within replay window
                 now = int(time.time())
                 if abs(now - timestamp) > WEBHOOK_REPLAY_WINDOW_S:
@@ -3442,7 +3587,10 @@ def build_api() -> FastAPI:
 
         # Check for replay using event ID
         if x_vendor_event_id:
-            if not webhook_replay_set.seen_once(x_vendor_event_id):
+            replay_store = getattr(request.app.state, "webhook_replay_store", None)
+            if replay_store is None:
+                return Response(status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
+            if not await replay_store.seen_once(x_vendor_event_id, WEBHOOK_REPLAY_TTL_S):
                 # Already processed this event
                 logger.info(
                     "Webhook replay detected",
@@ -3466,7 +3614,7 @@ def build_api() -> FastAPI:
         stmt = select(Run).where(Run.vendor_job_id == vendor_job_id)
         result = await db.execute(stmt)
         run = result.scalar_one_or_none()
-        
+
         if not run:
             # Unknown job, but not an error - return 204
             logger.info(
@@ -3536,7 +3684,7 @@ def build_api() -> FastAPI:
                 enabled=request.enabled,
                 metadata=request.metadata
             )
-            
+
             return ProcessorConfig(
                 processor_id=processor.id,
                 name=processor.name,
@@ -3589,7 +3737,7 @@ def build_api() -> FastAPI:
                 processor_type=processor_type,
                 enabled=enabled
             )
-            
+
             processors = [
                 ProcessorConfig(
                     processor_id=p.id,
@@ -3608,7 +3756,7 @@ def build_api() -> FastAPI:
                 )
                 for p in items
             ]
-            
+
             return ProcessorListResponse(
                 items=processors,
                 meta=build_pagination_meta(limit, offset, total)
@@ -3639,13 +3787,13 @@ def build_api() -> FastAPI:
                 tenant_id=tenant_ctx["tenant"],
                 processor_id=processor_id
             )
-            
+
             if not processor:
                 return JSONResponse(
                     status_code=status.HTTP_404_NOT_FOUND,
                     content=build_error_response("NOT_FOUND", f"Processor {processor_id} not found")
                 )
-            
+
             return ProcessorConfig(
                 processor_id=processor.id,
                 name=processor.name,
@@ -3696,13 +3844,13 @@ def build_api() -> FastAPI:
                 enabled=request.enabled,
                 metadata=request.metadata
             )
-            
+
             if not processor:
                 return JSONResponse(
                     status_code=status.HTTP_404_NOT_FOUND,
                     content=build_error_response("NOT_FOUND", f"Processor {processor_id} not found")
                 )
-            
+
             return ProcessorConfig(
                 processor_id=processor.id,
                 name=processor.name,
@@ -3749,13 +3897,13 @@ def build_api() -> FastAPI:
                 tenant_id=tenant_ctx["tenant"],
                 processor_id=processor_id
             )
-            
+
             if not deleted:
                 return JSONResponse(
                     status_code=status.HTTP_404_NOT_FOUND,
                     content=build_error_response("NOT_FOUND", f"Processor {processor_id} not found")
                 )
-            
+
             return Response(status_code=status.HTTP_204_NO_CONTENT)
         except Exception as e:
             logger.error(f"Error deleting processor: {e}", exc_info=True)
@@ -3789,7 +3937,7 @@ def build_api() -> FastAPI:
                 enabled=request.enabled,
                 metadata=request.metadata
             )
-            
+
             return WorkflowConfig(
                 workflow_id=workflow.id,
                 name=workflow.name,
@@ -3837,7 +3985,7 @@ def build_api() -> FastAPI:
                 offset=offset,
                 enabled=enabled
             )
-            
+
             workflows = [
                 WorkflowConfig(
                     workflow_id=w.id,
@@ -3853,7 +4001,7 @@ def build_api() -> FastAPI:
                 )
                 for w in items
             ]
-            
+
             return WorkflowListResponse(
                 items=workflows,
                 meta=build_pagination_meta(limit, offset, total)
@@ -3884,13 +4032,13 @@ def build_api() -> FastAPI:
                 tenant_id=tenant_ctx["tenant"],
                 workflow_id=workflow_id
             )
-            
+
             if not workflow:
                 return JSONResponse(
                     status_code=status.HTTP_404_NOT_FOUND,
                     content=build_error_response("NOT_FOUND", f"Workflow {workflow_id} not found")
                 )
-            
+
             return WorkflowConfig(
                 workflow_id=workflow.id,
                 name=workflow.name,
@@ -3935,13 +4083,13 @@ def build_api() -> FastAPI:
                 enabled=request.enabled,
                 metadata=request.metadata
             )
-            
+
             if not workflow:
                 return JSONResponse(
                     status_code=status.HTTP_404_NOT_FOUND,
                     content=build_error_response("NOT_FOUND", f"Workflow {workflow_id} not found")
                 )
-            
+
             return WorkflowConfig(
                 workflow_id=workflow.id,
                 name=workflow.name,
@@ -3985,13 +4133,13 @@ def build_api() -> FastAPI:
                 tenant_id=tenant_ctx["tenant"],
                 workflow_id=workflow_id
             )
-            
+
             if not deleted:
                 return JSONResponse(
                     status_code=status.HTTP_404_NOT_FOUND,
                     content=build_error_response("NOT_FOUND", f"Workflow {workflow_id} not found")
                 )
-            
+
             return Response(status_code=status.HTTP_204_NO_CONTENT)
         except Exception as e:
             logger.error(f"Error deleting workflow: {e}", exc_info=True)
@@ -4021,7 +4169,7 @@ def build_api() -> FastAPI:
                 workflow_id=workflow_id,
                 input_data=request.input_data
             )
-            
+
             return WorkflowExecutionResult(**result)
         except ValueError as e:
             return JSONResponse(
@@ -4061,7 +4209,7 @@ def build_api() -> FastAPI:
                 target_id=request.target_id,
                 metadata=request.metadata
             )
-            
+
             return EvaluationSetConfig(
                 evaluation_set_id=eval_set.id,
                 name=eval_set.name,
@@ -4111,7 +4259,7 @@ def build_api() -> FastAPI:
                 target_type=target_type,
                 target_id=target_id
             )
-            
+
             eval_sets = [
                 EvaluationSetConfig(
                     evaluation_set_id=e.id,
@@ -4127,7 +4275,7 @@ def build_api() -> FastAPI:
                 )
                 for e in items
             ]
-            
+
             return EvaluationSetListResponse(
                 items=eval_sets,
                 meta=build_pagination_meta(limit, offset, total)
@@ -4158,13 +4306,13 @@ def build_api() -> FastAPI:
                 tenant_id=tenant_ctx["tenant"],
                 evaluation_set_id=evaluation_set_id
             )
-            
+
             if not eval_set:
                 return JSONResponse(
                     status_code=status.HTTP_404_NOT_FOUND,
                     content=build_error_response("NOT_FOUND", f"Evaluation set {evaluation_set_id} not found")
                 )
-            
+
             return EvaluationSetConfig(
                 evaluation_set_id=eval_set.id,
                 name=eval_set.name,
@@ -4210,13 +4358,13 @@ def build_api() -> FastAPI:
                 target_id=request.target_id,
                 metadata=request.metadata
             )
-            
+
             if not eval_set:
                 return JSONResponse(
                     status_code=status.HTTP_404_NOT_FOUND,
                     content=build_error_response("NOT_FOUND", f"Evaluation set {evaluation_set_id} not found")
                 )
-            
+
             return EvaluationSetConfig(
                 evaluation_set_id=eval_set.id,
                 name=eval_set.name,
@@ -4260,13 +4408,13 @@ def build_api() -> FastAPI:
                 tenant_id=tenant_ctx["tenant"],
                 evaluation_set_id=evaluation_set_id
             )
-            
+
             if not deleted:
                 return JSONResponse(
                     status_code=status.HTTP_404_NOT_FOUND,
                     content=build_error_response("NOT_FOUND", f"Evaluation set {evaluation_set_id} not found")
                 )
-            
+
             return Response(status_code=status.HTTP_204_NO_CONTENT)
         except Exception as e:
             logger.error(f"Error deleting evaluation set: {e}", exc_info=True)
@@ -4294,7 +4442,7 @@ def build_api() -> FastAPI:
                 tenant_id=tenant_ctx["tenant"],
                 evaluation_set_id=evaluation_set_id
             )
-            
+
             return EvaluationResult(**result)
         except ValueError as e:
             return JSONResponse(
