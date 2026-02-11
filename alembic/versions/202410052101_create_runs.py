@@ -37,7 +37,7 @@ def upgrade() -> None:
     op.create_index("ix_runs_tenant_id", "runs", ["tenant_id"])
     op.create_index("ix_runs_status", "runs", ["status"])
     op.create_index("ix_runs_idempotency_key", "runs", ["idempotency_key"])
-    op.create_unique_constraint("uq_runs_vendor_job_id", "runs", ["vendor_job_id"])
+    op.create_index("uq_runs_vendor_job_id", "runs", ["vendor_job_id"], unique=True)
     op.create_index(
         "uq_runs_tenant_proc_idem",
         "runs",
@@ -50,7 +50,7 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.drop_index("uq_runs_tenant_proc_idem", table_name="runs")
-    op.drop_constraint("uq_runs_vendor_job_id", "runs", type_="unique")
+    op.drop_index("uq_runs_vendor_job_id", table_name="runs")
     op.drop_index("ix_runs_idempotency_key", table_name="runs")
     op.drop_index("ix_runs_status", table_name="runs")
     op.drop_index("ix_runs_tenant_id", table_name="runs")
