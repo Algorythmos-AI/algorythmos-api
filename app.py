@@ -722,6 +722,37 @@ async def _execute_job(
         )
 
 
+# ==================== API KEY PYDANTIC MODELS (module scope) ====================
+# These must be at module scope for Pydantic/OpenAPI schema generation to work.
+
+class CreateApiKeyRequest(BaseModel):
+    """Request to create a new API key."""
+    name: str = Field(..., min_length=1, max_length=100, description="Name for the API key")
+
+class ApiKeyResponse(BaseModel):
+    """API key info returned in list responses (no raw key)."""
+    id: str
+    name: str
+    prefix: str
+    created_at: datetime
+    last_used_at: Optional[datetime] = None
+
+class CreateApiKeyResponse(BaseModel):
+    """Response when creating a new API key (includes raw key once)."""
+    id: str
+    name: str
+    prefix: str
+    created_at: datetime
+    raw_key: str  # Only returned on creation!
+
+# Force Pydantic to fully resolve these models now.
+# Required because app.py is loaded under a synthetic module name (_app_entrypoint)
+# which prevents Pydantic's lazy resolution from working correctly.
+CreateApiKeyRequest.model_rebuild()
+ApiKeyResponse.model_rebuild()
+CreateApiKeyResponse.model_rebuild()
+
+
 def build_api() -> FastAPI:
     """Build and configure the FastAPI application."""
     # Initialize database module references
@@ -993,28 +1024,9 @@ def build_api() -> FastAPI:
         return {"status": "ok"}
 
     # ==================== API KEY MANAGEMENT ENDPOINTS ====================
-
-    # Pydantic models for API key endpoints
-    class CreateApiKeyRequest(BaseModel):
-        """Request to create a new API key."""
-        name: str = Field(..., min_length=1, max_length=100, description="Name for the API key")
-
-    class ApiKeyResponse(BaseModel):
-        """API key info returned in list responses (no raw key)."""
-        id: str
-        name: str
-        prefix: str
-        created_at: datetime
-        last_used_at: Optional[datetime] = None
-
-    class CreateApiKeyResponse(BaseModel):
-        """Response when creating a new API key (includes raw key once)."""
-        id: str
-        name: str
-        prefix: str
-        created_at: datetime
-        raw_key: str  # Only returned on creation!
-
+    
+    # Models are defined at module scope (above build_api) for Pydantic compatibility
+    
     # Constants for API keys
     API_KEY_PREFIX = "alg_"
     MAX_KEYS_PER_USER = 10
