@@ -759,13 +759,20 @@ def build_api() -> FastAPI:
     global async_session_factory, engine, get_session, Base, Run
     try:
         import database as db_module
-        import app.models as models_module
         async_session_factory = db_module.async_session_factory
         engine = db_module.engine
         get_session = db_module.get_session
-        Base = models_module.Base
-        Run = models_module.Run
-    except ImportError as e:
+        Base = db_module.Base
+
+        # app/models.py can't be imported as `app.models` on Vercel because
+        # app.py (file) shadows app/ (package). Load by file path instead.
+        from importlib import util as _importlib_util
+        _models_path = Path(__file__).resolve().parent / "app" / "models.py"
+        _spec = _importlib_util.spec_from_file_location("_app_models", str(_models_path))
+        _models_module = _importlib_util.module_from_spec(_spec)
+        _spec.loader.exec_module(_models_module)  # type: ignore[union-attr]
+        Run = _models_module.Run
+    except Exception as e:
         # Database modules not available - tests may provide mocks
         logger = get_logger()
         logger.warning(f"Database import failed: {e}")
