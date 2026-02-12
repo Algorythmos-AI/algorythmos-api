@@ -10,10 +10,7 @@ Tests processor run enhancements:
 - Lifecycle timestamps (started_at, completed_at)
 """
 
-import sys
 from datetime import datetime
-
-sys.path.insert(0, '/Users/skalaliya/Desktop/api-algorythmos')
 
 from document_processing.schemas_processor_runs import (
     Citation,

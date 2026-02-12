@@ -11,10 +11,7 @@ Tests workflow run enhancements:
 - POST /workflow_runs/{id}:correct endpoint
 """
 
-import sys
 from datetime import datetime
-
-sys.path.insert(0, '/Users/skalaliya/Desktop/api-algorythmos')
 
 from document_processing.schemas_workflow_runs import (
     WorkflowStepResult,

@@ -12,10 +12,7 @@ Tests processor versioning lifecycle:
 """
 
 import pytest
-import sys
 from datetime import datetime
-
-sys.path.insert(0, '/Users/skalaliya/Desktop/api-algorythmos')
 
 from document_processing.services.processor_version_service import (
     create_processor_version,
