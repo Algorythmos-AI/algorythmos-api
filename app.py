@@ -16,6 +16,7 @@ import hashlib
 import httpx
 import secrets
 from fastapi import BackgroundTasks, Depends, FastAPI, File, Header, HTTPException, Request, Response, UploadFile, status, Path as PathParam, Query, Body
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.params import Body, Query
 from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field
@@ -753,6 +754,189 @@ ApiKeyResponse.model_rebuild()
 CreateApiKeyResponse.model_rebuild()
 
 
+
+# ---------------------------------------------------------------------------
+# HTML builders for premium dark-theme documentation UI
+# ---------------------------------------------------------------------------
+
+def _build_swagger_html(title: str, openapi_url: str, custom_css: str) -> str:
+    """Build a complete dark-themed Swagger UI HTML page."""
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>{title} — API Docs</title>
+  <link rel="icon" href="/api/favicon.ico" type="image/svg+xml"/>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css"/>
+  <style>{custom_css}</style>
+</head>
+<body>
+  <div id="swagger-ui"></div>
+  <script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
+  <script>
+    SwaggerUIBundle({{
+      url: "{openapi_url}",
+      dom_id: "#swagger-ui",
+      presets: [SwaggerUIBundle.presets.apis, SwaggerUIBundle.SwaggerUIStandalonePreset],
+      layout: "BaseLayout",
+      tryItOutEnabled: true,
+      filter: true,
+      deepLinking: true,
+      displayRequestDuration: true,
+      syntaxHighlight: {{ theme: "monokai" }},
+    }});
+  </script>
+</body>
+</html>"""
+
+
+def _build_landing_html() -> str:
+    """Build a premium dark-themed API landing page."""
+    return """<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Algorythmos API</title>
+  <meta name="description" content="PDF Usage Extraction Service — Extract internet usage data from telecom PDF invoices via a modern REST API."/>
+  <link rel="icon" href="/api/favicon.ico" type="image/svg+xml"/>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet"/>
+  <style>
+    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+    :root {
+      --bg: #0a0a1a; --surface: #12122e; --card: #181845;
+      --text: #e2e8f0; --muted: #94a3b8; --accent: #6366f1;
+      --accent2: #a855f7; --accent3: #ec4899; --success: #22c55e;
+      --border: rgba(148,163,184,0.1);
+    }
+    body { font-family: 'Inter', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; overflow-x: hidden; }
+    /* Animated gradient background */
+    .bg-glow { position: fixed; inset: 0; z-index: 0; pointer-events: none; }
+    .bg-glow::before { content: ''; position: absolute; top: -30%; left: -20%; width: 60%; height: 60%; background: radial-gradient(circle, rgba(99,102,241,0.12) 0%, transparent 70%); animation: float 8s ease-in-out infinite; }
+    .bg-glow::after { content: ''; position: absolute; bottom: -20%; right: -15%; width: 50%; height: 50%; background: radial-gradient(circle, rgba(168,85,247,0.1) 0%, transparent 70%); animation: float 12s ease-in-out infinite reverse; }
+    @keyframes float { 0%,100% { transform: translate(0,0) scale(1); } 50% { transform: translate(30px,-20px) scale(1.1); } }
+    .container { position: relative; z-index: 1; max-width: 1100px; margin: 0 auto; padding: 0 24px; }
+    /* Header */
+    header { padding: 60px 0 40px; text-align: center; }
+    .logo-row { display: inline-flex; align-items: center; gap: 16px; margin-bottom: 24px; }
+    .logo-icon { width: 48px; height: 48px; }
+    .logo-text { font-size: 1.5rem; font-weight: 700; background: linear-gradient(135deg, var(--accent), var(--accent2)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+    h1 { font-size: 3.2rem; font-weight: 800; line-height: 1.15; margin-bottom: 16px; background: linear-gradient(135deg, var(--text) 0%, var(--muted) 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+    h1 span { background: linear-gradient(135deg, var(--accent), var(--accent2), var(--accent3)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+    .subtitle { font-size: 1.15rem; color: var(--muted); max-width: 600px; margin: 0 auto 32px; line-height: 1.6; }
+    /* Status badge */
+    .status { display: inline-flex; align-items: center; gap: 8px; background: rgba(34,197,94,0.1); border: 1px solid rgba(34,197,94,0.3); border-radius: 20px; padding: 6px 16px; font-size: 0.85rem; color: var(--success); font-weight: 500; }
+    .status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--success); animation: pulse 2s ease-in-out infinite; }
+    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+    /* CTA buttons */
+    .cta-row { display: flex; justify-content: center; gap: 16px; margin-top: 32px; flex-wrap: wrap; }
+    .btn { display: inline-flex; align-items: center; gap: 8px; padding: 14px 28px; border-radius: 12px; font-weight: 600; font-size: 0.95rem; text-decoration: none; transition: all 0.2s ease; border: none; cursor: pointer; }
+    .btn-primary { background: linear-gradient(135deg, var(--accent), var(--accent2)); color: #fff; box-shadow: 0 4px 20px rgba(99,102,241,0.3); }
+    .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 8px 30px rgba(99,102,241,0.5); }
+    .btn-secondary { background: var(--card); color: var(--text); border: 1px solid var(--border); }
+    .btn-secondary:hover { border-color: var(--accent); background: rgba(99,102,241,0.05); }
+    /* Feature cards */
+    .features { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; margin: 60px 0; }
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 28px; transition: all 0.25s ease; }
+    .card:hover { border-color: var(--accent); transform: translateY(-4px); box-shadow: 0 12px 40px rgba(99,102,241,0.15); }
+    .card-icon { font-size: 2rem; margin-bottom: 14px; }
+    .card h3 { font-size: 1.1rem; font-weight: 600; margin-bottom: 8px; }
+    .card p { font-size: 0.9rem; color: var(--muted); line-height: 1.6; }
+    /* Quick endpoints */
+    .endpoints { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 28px; margin-bottom: 60px; }
+    .endpoints h2 { font-size: 1.3rem; font-weight: 700; margin-bottom: 20px; }
+    .endpoint { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--border); }
+    .endpoint:last-child { border-bottom: none; }
+    .method { padding: 4px 10px; border-radius: 6px; font-size: 0.7rem; font-weight: 700; text-transform: uppercase; min-width: 56px; text-align: center; }
+    .method-get { background: rgba(34,197,94,0.15); color: var(--success); }
+    .method-post { background: rgba(99,102,241,0.15); color: var(--accent); }
+    .ep-path { font-family: 'JetBrains Mono', monospace; font-size: 0.9rem; color: var(--text); }
+    .ep-desc { font-size: 0.85rem; color: var(--muted); margin-left: auto; }
+    /* Footer */
+    footer { text-align: center; padding: 40px 0; color: var(--muted); font-size: 0.85rem; border-top: 1px solid var(--border); }
+    footer a { color: var(--accent); text-decoration: none; }
+    @media (max-width: 640px) { h1 { font-size: 2rem; } .features { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <div class="bg-glow"></div>
+  <div class="container">
+    <header>
+      <div class="logo-row">
+        <svg class="logo-icon" viewBox="0 0 32 32"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#6366f1"/><stop offset="100%" stop-color="#a855f7"/></linearGradient></defs><rect width="32" height="32" rx="6" fill="url(#g)"/><text x="16" y="23" text-anchor="middle" fill="white" font-family="Arial,sans-serif" font-weight="bold" font-size="20">A</text></svg>
+        <span class="logo-text">Algorythmos</span>
+      </div>
+      <h1>PDF Usage<br/><span>Extraction API</span></h1>
+      <p class="subtitle">Extract internet usage data from telecom PDF invoices with a powerful, production-ready REST API.</p>
+      <div class="status"><span class="status-dot"></span> All systems operational</div>
+      <div class="cta-row">
+        <a href="/api/docs" class="btn btn-primary">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14,2 14,8 20,8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+          API Documentation
+        </a>
+        <a href="/api/alg/healthz" class="btn btn-secondary">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22,12 18,12 15,21 9,3 6,12 2,12"/></svg>
+          Health Check
+        </a>
+      </div>
+    </header>
+
+    <section class="features">
+      <div class="card">
+        <div class="card-icon">📄</div>
+        <h3>PDF Processing</h3>
+        <p>Upload telecom PDF invoices and extract structured usage data automatically with AI-powered document parsing.</p>
+      </div>
+      <div class="card">
+        <div class="card-icon">⚡</div>
+        <h3>Async Processing</h3>
+        <p>Background job processing with webhook notifications, idempotency keys, and automatic retries built in.</p>
+      </div>
+      <div class="card">
+        <div class="card-icon">🔒</div>
+        <h3>Secure Auth</h3>
+        <p>Google OAuth 2.0 and API key authentication with SHA-256 hashing. Multi-tenant isolation by default.</p>
+      </div>
+      <div class="card">
+        <div class="card-icon">🔄</div>
+        <h3>Workflows</h3>
+        <p>Chain processors into configurable workflows with versioned evaluation sets for quality tracking.</p>
+      </div>
+      <div class="card">
+        <div class="card-icon">📊</div>
+        <h3>Observability</h3>
+        <p>Prometheus metrics, structured logging, request tracing, and detailed run versioning for full visibility.</p>
+      </div>
+      <div class="card">
+        <div class="card-icon">🚀</div>
+        <h3>Production Ready</h3>
+        <p>Rate limiting, idempotency, webhook replay protection, and durable state — ready for scale from day one.</p>
+      </div>
+    </section>
+
+    <section class="endpoints">
+      <h2>Quick Reference</h2>
+      <div class="endpoint"><span class="method method-get">GET</span><span class="ep-path">/alg/healthz</span><span class="ep-desc">Health check</span></div>
+      <div class="endpoint"><span class="method method-get">GET</span><span class="ep-path">/version</span><span class="ep-desc">Service version</span></div>
+      <div class="endpoint"><span class="method method-post">POST</span><span class="ep-path">/auth/google</span><span class="ep-desc">Google OAuth</span></div>
+      <div class="endpoint"><span class="method method-post">POST</span><span class="ep-path">/auth/keys</span><span class="ep-desc">Create API key</span></div>
+      <div class="endpoint"><span class="method method-post">POST</span><span class="ep-path">/parse</span><span class="ep-desc">Parse PDF</span></div>
+      <div class="endpoint"><span class="method method-get">GET</span><span class="ep-path">/runs/{id}</span><span class="ep-desc">Get run status</span></div>
+      <div class="endpoint"><span class="method method-post">POST</span><span class="ep-path">/usage/extract</span><span class="ep-desc">Extract usage</span></div>
+    </section>
+
+    <footer>
+      Built with FastAPI &amp; Python &mdash; <a href="/api/docs">View full API docs</a>
+    </footer>
+  </div>
+</body>
+</html>"""
+
+
 def build_api() -> FastAPI:
     """Build and configure the FastAPI application."""
     # Initialize database module references
@@ -851,8 +1035,8 @@ def build_api() -> FastAPI:
         description="Extract internet usage data from telecom PDF invoices",
         root_path="/api",  # For Vercel routing
         lifespan=lifespan,
-        # Customize OpenAPI schema generation
-        swagger_ui_parameters={"tryItOutEnabled": True},
+        docs_url=None,   # Disable default docs — we serve custom dark theme
+        redoc_url=None,   # Disable default redoc
         generate_unique_id_function=lambda route: f"{route.tags[0]}-{route.name}" if route.tags else route.name,
     )
     app.state.rate_limit_store = rate_limit_store
@@ -862,10 +1046,122 @@ def build_api() -> FastAPI:
     app.state.state_backend = state_backend
     app.state.using_memory_operational_state = using_memory_operational_state
 
-    @app.get("/", tags=["health"], summary="Health check", include_in_schema=False)
-    async def health() -> dict[str, str]:
-        """Lightweight health check for serverless environments."""
-        return {"status": "ok"}
+    # ==================== CUSTOM DARK SWAGGER UI ====================
+    SWAGGER_DARK_CSS = """
+    :root {
+      --bg-primary: #0f0f23;
+      --bg-secondary: #1a1a3e;
+      --bg-card: #16163a;
+      --text-primary: #e2e8f0;
+      --text-secondary: #94a3b8;
+      --accent: #6366f1;
+      --accent-hover: #818cf8;
+      --accent-glow: rgba(99,102,241,0.3);
+      --success: #22c55e;
+      --warning: #f59e0b;
+      --danger: #ef4444;
+      --border: rgba(148,163,184,0.12);
+    }
+    body { background: var(--bg-primary) !important; color: var(--text-primary) !important; }
+    .swagger-ui { background: var(--bg-primary) !important; color: var(--text-primary) !important; font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif !important; }
+    .swagger-ui .topbar { display: none !important; }
+    .swagger-ui .info { margin: 30px 0 !important; }
+    .swagger-ui .info .title { color: var(--text-primary) !important; font-weight: 700 !important; font-size: 2rem !important; }
+    .swagger-ui .info .description p { color: var(--text-secondary) !important; }
+    .swagger-ui .info a { color: var(--accent) !important; }
+    .swagger-ui .scheme-container { background: var(--bg-secondary) !important; border: 1px solid var(--border) !important; border-radius: 12px !important; padding: 16px !important; box-shadow: 0 4px 20px rgba(0,0,0,0.3) !important; }
+    .swagger-ui .opblock-tag { color: var(--text-primary) !important; border-bottom: 1px solid var(--border) !important; font-weight: 600 !important; }
+    .swagger-ui .opblock-tag:hover { background: var(--bg-secondary) !important; }
+    .swagger-ui .opblock { background: var(--bg-card) !important; border: 1px solid var(--border) !important; border-radius: 10px !important; margin-bottom: 12px !important; box-shadow: 0 2px 12px rgba(0,0,0,0.2) !important; transition: all 0.2s ease !important; }
+    .swagger-ui .opblock:hover { border-color: var(--accent) !important; box-shadow: 0 4px 24px var(--accent-glow) !important; }
+    .swagger-ui .opblock .opblock-summary { border: none !important; border-radius: 10px !important; }
+    .swagger-ui .opblock .opblock-summary-method { border-radius: 6px !important; font-weight: 700 !important; font-size: 0.75rem !important; padding: 6px 16px !important; min-width: 70px !important; text-align: center !important; }
+    .swagger-ui .opblock.opblock-get { border-left: 3px solid var(--success) !important; }
+    .swagger-ui .opblock.opblock-get .opblock-summary-method { background: var(--success) !important; color: #fff !important; }
+    .swagger-ui .opblock.opblock-post { border-left: 3px solid var(--accent) !important; }
+    .swagger-ui .opblock.opblock-post .opblock-summary-method { background: var(--accent) !important; color: #fff !important; }
+    .swagger-ui .opblock.opblock-put { border-left: 3px solid var(--warning) !important; }
+    .swagger-ui .opblock.opblock-put .opblock-summary-method { background: var(--warning) !important; color: #fff !important; }
+    .swagger-ui .opblock.opblock-delete { border-left: 3px solid var(--danger) !important; }
+    .swagger-ui .opblock.opblock-delete .opblock-summary-method { background: var(--danger) !important; color: #fff !important; }
+    .swagger-ui .opblock.opblock-patch { border-left: 3px solid #a855f7 !important; }
+    .swagger-ui .opblock.opblock-patch .opblock-summary-method { background: #a855f7 !important; color: #fff !important; }
+    .swagger-ui .opblock .opblock-summary-path { color: var(--text-primary) !important; }
+    .swagger-ui .opblock .opblock-summary-description { color: var(--text-secondary) !important; }
+    .swagger-ui .opblock-body { background: var(--bg-secondary) !important; }
+    .swagger-ui .opblock-section-header { background: var(--bg-secondary) !important; border-bottom: 1px solid var(--border) !important; }
+    .swagger-ui .opblock-section-header h4 { color: var(--text-primary) !important; }
+    .swagger-ui .btn { border-radius: 8px !important; font-weight: 600 !important; transition: all 0.15s ease !important; }
+    .swagger-ui .btn.execute { background: var(--accent) !important; border-color: var(--accent) !important; color: #fff !important; border-radius: 8px !important; font-weight: 600 !important; }
+    .swagger-ui .btn.execute:hover { background: var(--accent-hover) !important; box-shadow: 0 4px 16px var(--accent-glow) !important; }
+    .swagger-ui .btn.cancel { color: var(--danger) !important; border-color: var(--danger) !important; }
+    .swagger-ui .btn.authorize { color: var(--accent) !important; border-color: var(--accent) !important; }
+    .swagger-ui .btn.authorize svg { fill: var(--accent) !important; }
+    .swagger-ui select { background: var(--bg-card) !important; color: var(--text-primary) !important; border: 1px solid var(--border) !important; border-radius: 8px !important; }
+    .swagger-ui input[type=text], .swagger-ui textarea { background: var(--bg-card) !important; color: var(--text-primary) !important; border: 1px solid var(--border) !important; border-radius: 8px !important; }
+    .swagger-ui .parameter__name { color: var(--text-primary) !important; }
+    .swagger-ui .parameter__type { color: var(--text-secondary) !important; }
+    .swagger-ui .parameter__in { color: var(--text-secondary) !important; }
+    .swagger-ui table thead tr th { color: var(--text-secondary) !important; border-bottom: 1px solid var(--border) !important; }
+    .swagger-ui table tbody tr td { color: var(--text-primary) !important; border-bottom: 1px solid var(--border) !important; }
+    .swagger-ui .response-col_status { color: var(--text-primary) !important; }
+    .swagger-ui .response-col_description { color: var(--text-secondary) !important; }
+    .swagger-ui .responses-inner h4, .swagger-ui .responses-inner h5 { color: var(--text-primary) !important; }
+    .swagger-ui .model-box { background: var(--bg-card) !important; border: 1px solid var(--border) !important; border-radius: 8px !important; }
+    .swagger-ui .model { color: var(--text-primary) !important; }
+    .swagger-ui .model-title { color: var(--text-primary) !important; }
+    .swagger-ui .prop-type { color: var(--accent) !important; }
+    .swagger-ui .prop-format { color: var(--text-secondary) !important; }
+    .swagger-ui section.models { border: 1px solid var(--border) !important; border-radius: 12px !important; background: var(--bg-card) !important; }
+    .swagger-ui section.models h4 { color: var(--text-primary) !important; }
+    .swagger-ui .model-container { background: var(--bg-card) !important; }
+    .swagger-ui .highlight-code .microlight { background: var(--bg-primary) !important; color: var(--text-primary) !important; border-radius: 8px !important; border: 1px solid var(--border) !important; font-family: 'JetBrains Mono', 'Fira Code', monospace !important; }
+    .swagger-ui .copy-to-clipboard { background: var(--bg-card) !important; }
+    .swagger-ui .download-contents { color: var(--accent) !important; }
+    .swagger-ui .response-control-media-type__accept-message { color: var(--text-secondary) !important; }
+    .swagger-ui .version-stamp { display: none !important; }
+    .swagger-ui .info .version { background: var(--accent) !important; color: #fff !important; border-radius: 20px !important; padding: 4px 12px !important; font-weight: 600 !important; }
+    .swagger-ui .loading-container { background: var(--bg-primary) !important; }
+    .swagger-ui .loading-container .loading:after { color: var(--text-secondary) !important; }
+    .swagger-ui .markdown p, .swagger-ui .markdown li { color: var(--text-secondary) !important; }
+    .swagger-ui .markdown code { background: var(--bg-card) !important; color: var(--accent) !important; border-radius: 4px !important; padding: 2px 6px !important; }
+    /* Scrollbar styling */
+    ::-webkit-scrollbar { width: 8px; height: 8px; }
+    ::-webkit-scrollbar-track { background: var(--bg-primary); }
+    ::-webkit-scrollbar-thumb { background: var(--bg-secondary); border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: var(--accent); }
+    /* Header gradient accent */
+    .swagger-ui .info { border-bottom: 2px solid transparent; background-image: linear-gradient(var(--bg-primary), var(--bg-primary)), linear-gradient(135deg, var(--accent), #a855f7, #ec4899); background-origin: padding-box, border-box; background-clip: padding-box, border-box; padding-bottom: 24px !important; }
+    """
+
+    @app.get("/docs", include_in_schema=False)
+    async def custom_swagger_ui() -> HTMLResponse:
+        """Serve custom dark-themed Swagger UI."""
+        return HTMLResponse(
+            content=_build_swagger_html(app.title, app.openapi_url, SWAGGER_DARK_CSS),
+            media_type="text/html",
+        )
+
+    # ==================== FAVICON ====================
+    @app.get("/favicon.ico", include_in_schema=False)
+    async def favicon():
+        """Serve an inline SVG favicon."""
+        svg = '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+          <defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stop-color="#6366f1"/>
+            <stop offset="100%" stop-color="#a855f7"/>
+          </linearGradient></defs>
+          <rect width="32" height="32" rx="6" fill="url(#g)"/>
+          <text x="16" y="23" text-anchor="middle" fill="white" font-family="Arial,sans-serif" font-weight="bold" font-size="20">A</text>
+        </svg>'''
+        return Response(content=svg, media_type="image/svg+xml",
+                        headers={"Cache-Control": "public, max-age=86400"})
+
+    # ==================== LANDING PAGE ====================
+    @app.get("/", tags=["health"], summary="API landing page", include_in_schema=False)
+    async def landing_page() -> HTMLResponse:
+        """Serve a premium API landing page."""
+        return HTMLResponse(content=_build_landing_html())
 
     # Custom OpenAPI schema with error handling
     @app.get("/openapi.json", include_in_schema=False)
