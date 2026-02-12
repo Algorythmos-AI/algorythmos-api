@@ -52,6 +52,14 @@ class Settings(BaseSettings):
         default=None,
         description="Secret for vendor webhook HMAC verification"
     )
+    WEBHOOK_ALLOW_LEGACY_SIGNATURES: bool = Field(
+        default=True,
+        description="Allow legacy vendor webhook signature scheme (sha256=...)."
+    )
+    WEBHOOK_LEGACY_REQUIRE_TIMESTAMP: bool = Field(
+        default=True,
+        description="Require X-Vendor-Timestamp for legacy webhook signatures."
+    )
     REDIS_URL: str | None = Field(
         default=None,
         validation_alias=AliasChoices("REDIS_URL", "redis_url"),
