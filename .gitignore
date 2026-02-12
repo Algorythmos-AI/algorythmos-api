@@ -148,3 +148,6 @@ Thumbs.db
 Thumbs.db:encryptable
 Desktop.ini
 $RECYCLE.BIN/
+
+# runtime uploads
+/files/
