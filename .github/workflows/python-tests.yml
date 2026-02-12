@@ -53,23 +53,22 @@ jobs:
     - name: Run all tests
       run: |
         source .venv/bin/activate
+        set -euo pipefail
         PYTHONPATH=. pytest tests/ -q --timeout=30 -x --tb=short 2>&1 | head -200
     
     - name: Security audit with pip-audit
       if: always()
-      continue-on-error: true
       run: |
         source .venv/bin/activate
         uv pip install pip-audit
-        pip-audit --desc || true
+        pip-audit --desc
     
     - name: Lint with ruff
       if: always()
-      continue-on-error: true
       run: |
         source .venv/bin/activate
         uv pip install ruff
-        ruff check . || true
+        ruff check .
 
   redis-integration:
     runs-on: ubuntu-latest
