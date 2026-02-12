@@ -183,6 +183,7 @@ async function multipartRequest<T>(
 export const health = {
     check: () => request<{ status: string }>("/alg/healthz"),
     version: () => request<{ version: string; environment: string }>("/version"),
+    capabilities: () => request<{ supported_formats: string[]; limits: Record<string, number>; webhook: Record<string, boolean | number> }>("/capabilities"),
 };
 
 // ---------- Auth ----------

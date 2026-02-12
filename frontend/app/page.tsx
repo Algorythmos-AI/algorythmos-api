@@ -37,17 +37,20 @@ export default function DashboardPage() {
     const [versionData, setVersionData] = useState<VersionData | null>(null);
     const [recentRuns, setRecentRuns] = useState<RunItem[]>([]);
     const [schemaCount, setSchemaCount] = useState<number | null>(null);
+    const [capabilities, setCapabilities] = useState<{ supported_formats: string[]; limits: any } | null>(null);
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
         async function load() {
             try {
-                const [h, v] = await Promise.allSettled([
+                const [h, v, c] = await Promise.allSettled([
                     health.check(),
                     health.version(),
+                    health.capabilities(),
                 ]);
                 if (h.status === "fulfilled") setHealthData(h.value as HealthData);
                 if (v.status === "fulfilled") setVersionData(v.value as VersionData);
+                if (c.status === "fulfilled") setCapabilities(c.value as any);
 
                 // Try to load runs and schemas
                 try {
@@ -284,6 +287,32 @@ export default function DashboardPage() {
                                     <p>Unable to reach API. Check your API key in Settings.</p>
                                 )}
                             </div>
+                        )}
+                    </div>
+                    {/* Capabilities Section */}
+                    <div className={styles.cardHeader} style={{ marginTop: 24, paddingTop: 24, borderTop: "1px solid var(--border-color)" }}>
+                        <span className={styles.cardTitle}>System Capabilities</span>
+                    </div>
+                    <div className={styles.cardBody}>
+                        {healthData && capabilities ? (
+                            <div className={styles.healthGrid}>
+                                <div className={styles.healthRow}>
+                                    <span className={styles.healthLabel}>Supported Formats</span>
+                                    <span className={styles.healthValue} style={{ fontSize: 11, maxWidth: 150, textAlign: "right", whiteSpace: "normal" }}>
+                                        {capabilities.supported_formats.join(", ")}
+                                    </span>
+                                </div>
+                                <div className={styles.healthRow}>
+                                    <span className={styles.healthLabel}>Max File Size</span>
+                                    <span className={styles.healthValue}>
+                                        {capabilities.limits.max_file_mb} MB
+                                    </span>
+                                </div>
+                            </div>
+                        ) : (
+                            <p style={{ fontSize: 12, color: "var(--text-tertiary)" }}>
+                                {loading ? "Loading capabilities..." : "Unable to load capabilities"}
+                            </p>
                         )}
                     </div>
                 </div>
