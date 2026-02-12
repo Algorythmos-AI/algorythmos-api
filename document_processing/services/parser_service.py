@@ -186,7 +186,7 @@ async def execute_parser_run(
                 text,
                 run_db.splitter_id,
             )
-            run_db.split_chunks = split_chunks
+            run_db.split_chunks = split_chunks.get("chunks") if isinstance(split_chunks, dict) else split_chunks
         
         # Step 3: Extraction (if schema specified)
         extracted_data = None
@@ -258,7 +258,7 @@ async def execute_parser_run(
             file_id=run_db.file_id,
             status="completed",
             classification=classification_result,
-            chunks=split_chunks,
+            chunks=(split_chunks.get("chunks") if isinstance(split_chunks, dict) else split_chunks),
             extracted=extracted_data,
             confidence=confidence_score / 100.0 if confidence_score else None,
             processing_time_ms=processing_time_ms,
