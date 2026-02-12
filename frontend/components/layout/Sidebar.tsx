@@ -84,7 +84,10 @@ export default function Sidebar() {
     return (
         <aside className={styles.sidebar}>
             <div className={styles.logo}>
-                <div className={styles.logoIcon}>A</div>
+                <div className={styles.logoImage}>
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src="/logo.png" alt="Algorythmos" style={{ height: 40, width: "auto" }} />
+                </div>
                 <div className={styles.logoText}>
                     <span>Algorythmos</span>
                 </div>
