@@ -7,7 +7,7 @@ Tests for:
 """
 import pytest
 from httpx import AsyncClient
-from core.config import settings
+from config import settings
 
 
 @pytest.mark.asyncio

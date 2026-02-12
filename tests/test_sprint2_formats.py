@@ -6,7 +6,7 @@ Tests for P1.1: Format validation for all Extend API supported types
 import io
 import pytest
 from httpx import AsyncClient
-from core.config import settings
+from config import settings
 
 
 # Test file creation helpers

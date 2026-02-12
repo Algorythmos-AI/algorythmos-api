@@ -4,8 +4,9 @@ Test Sprint 8: Production Hardening + CI/CD (P8.1-P8.3)
 Final acceptance tests validating all 8 sprints and production readiness.
 """
 
-import sys
-sys.path.insert(0, '/Users/skalaliya/Desktop/api-algorythmos')
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 from datetime import datetime
 
@@ -191,7 +192,7 @@ def test_ci_cd_pipeline_exists():
     """Verify CI/CD pipeline configuration exists."""
     import os
     
-    ci_path = "/Users/skalaliya/Desktop/api-algorythmos/.github/workflows/python-tests.yml"
+    ci_path = str(PROJECT_ROOT / ".github" / "workflows" / "python-tests.yml")
     assert os.path.exists(ci_path), "CI/CD pipeline file should exist"
     
     # Read and verify content
@@ -245,7 +246,7 @@ def test_database_migrations():
     """Verify all database migrations are present."""
     import os
     
-    migrations_dir = "/Users/skalaliya/Desktop/api-algorythmos/alembic/versions"
+    migrations_dir = str(PROJECT_ROOT / "alembic" / "versions")
     assert os.path.exists(migrations_dir), "Migrations directory should exist"
     
     # Count migration files
@@ -263,7 +264,7 @@ def test_model_completeness():
     # Models have circular import issues, so we verify schema structure instead
     import os
     
-    models_file = "/Users/skalaliya/Desktop/api-algorythmos/document_processing/models.py"
+    models_file = str(PROJECT_ROOT / "document_processing" / "models.py")
     assert os.path.exists(models_file), "Models file should exist"
     
     # Read and verify model definitions exist

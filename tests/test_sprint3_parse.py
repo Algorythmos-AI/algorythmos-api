@@ -11,7 +11,7 @@ Tests for Extend API parity:
 
 import pytest
 from httpx import AsyncClient
-from core.config import settings
+from config import settings
 
 
 def create_test_pdf_multipage() -> bytes:
