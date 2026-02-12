@@ -92,6 +92,7 @@ from document_processing.services.schema_service import SchemaService
 from document_processing.services import extractor_service
 from document_processing.services import classifier_service
 from document_processing.services import splitter_service
+from document_processing.services.format_validator import format_validator
 from document_processing.services import file_service
 from document_processing.services import parser_service
 from document_processing.services import processor_service
@@ -1186,10 +1187,12 @@ def build_api() -> FastAPI:
     async def serve_public(filename: str):
         """Serve branding assets from the public/ directory."""
         import mimetypes
-        public_dir = Path(__file__).resolve().parent / "public"
+        public_dir = (Path(__file__).resolve().parent / "public").resolve()
         file_path = (public_dir / filename).resolve()
         # Security: prevent path traversal
-        if not str(file_path).startswith(str(public_dir)):
+        try:
+            file_path.relative_to(public_dir)
+        except ValueError:
             raise HTTPException(status_code=403, detail="Forbidden")
         if not file_path.exists() or not file_path.is_file():
             raise HTTPException(status_code=404, detail="Not found")
@@ -1288,6 +1291,23 @@ def build_api() -> FastAPI:
         return {"status": "ok"}
 
     # Version endpoint (public)
+    @app.get("/capabilities", tags=["health"], summary="Runtime capabilities")
+    async def get_capabilities() -> Dict[str, Any]:
+        """Return runtime-supported formats and enterprise controls."""
+        return {
+            "supported_formats": format_validator.get_supported_formats(),
+            "limits": {
+                "max_file_mb": settings.MAX_FILE_MB,
+                "max_file_bytes": settings.max_file_bytes,
+                "run_max_file_bytes": RUN_MAX_FILE_BYTES,
+            },
+            "webhook": {
+                "allow_legacy_signatures": settings.WEBHOOK_ALLOW_LEGACY_SIGNATURES,
+                "legacy_requires_timestamp": settings.WEBHOOK_LEGACY_REQUIRE_TIMESTAMP,
+                "replay_window_s": WEBHOOK_REPLAY_WINDOW_S,
+            },
+        }
+
     @app.get("/version", tags=["health"])
     async def version() -> dict[str, str]:
         """Get service version and environment information."""
@@ -2734,6 +2754,9 @@ def build_api() -> FastAPI:
 
             return file_upload
 
+        except HTTPException:
+            raise
+
         except Exception as e:
             logger.error(
                 "File upload failed",
@@ -3907,22 +3930,13 @@ def build_api() -> FastAPI:
         if not sig_info:
             return Response(status_code=status.HTTP_401_UNAUTHORIZED)
 
-        # Determine strict mode based on configuration
-        # Stage 5+ enforces timestamp for legacy signatures
-        # Check if secret indicates stage 5 or higher (stage5, stage6, stage7, etc.)
-        strict_legacy_validation = False
-        if settings.VENDOR_WEBHOOK_SECRET:
-            secret_lower = settings.VENDOR_WEBHOOK_SECRET.lower()
-            for stage_num in range(5, 20):  # Check for stage5 through stage19
-                if f"stage{stage_num}" in secret_lower:
-                    strict_legacy_validation = True
-                    break
-
         # For v1 signatures, timestamp is embedded in the signature header
         # For legacy signatures (sha256=...), timestamp handling depends on mode
         if sig_info.scheme == "legacy":
-            # In strict mode (Stage 5+), legacy format requires timestamp header
-            if strict_legacy_validation and not x_vendor_timestamp:
+            if not settings.WEBHOOK_ALLOW_LEGACY_SIGNATURES:
+                return Response(status_code=status.HTTP_401_UNAUTHORIZED)
+
+            if settings.WEBHOOK_LEGACY_REQUIRE_TIMESTAMP and not x_vendor_timestamp:
                 return Response(status_code=status.HTTP_401_UNAUTHORIZED)
 
             if x_vendor_timestamp:

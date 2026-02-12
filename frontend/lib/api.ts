@@ -86,7 +86,7 @@ function parseErrorMessage(status: number, data: unknown): { message: string; co
         403: "Forbidden — you don't have access to this resource",
         404: "Not found",
         413: "File too large",
-        415: "Unsupported file type — only PDFs are accepted",
+        415: "Unsupported file type",
         422: "Processing failed — the document could not be parsed",
         429: "Rate limit exceeded — please try again later",
         500: "Internal server error",
@@ -211,7 +211,7 @@ export const schemas = {
         request<unknown>("/schemas", { method: "POST", body: JSON.stringify(data) }),
     update: (id: string, data: unknown) =>
         request<unknown>(`/schemas/${id}`, {
-            method: "PUT",
+            method: "PATCH",
             body: JSON.stringify(data),
         }),
     delete: (id: string) =>
@@ -229,7 +229,7 @@ export const extractors = {
         request<unknown>("/extractors", { method: "POST", body: JSON.stringify(data) }),
     update: (id: string, data: unknown) =>
         request<unknown>(`/extractors/${id}`, {
-            method: "PUT",
+            method: "PATCH",
             body: JSON.stringify(data),
         }),
     delete: (id: string) =>
@@ -247,7 +247,7 @@ export const classifiers = {
         request<unknown>("/classifiers", { method: "POST", body: JSON.stringify(data) }),
     update: (id: string, data: unknown) =>
         request<unknown>(`/classifiers/${id}`, {
-            method: "PUT",
+            method: "PATCH",
             body: JSON.stringify(data),
         }),
     delete: (id: string) =>
@@ -265,7 +265,7 @@ export const splitters = {
         request<unknown>("/splitters", { method: "POST", body: JSON.stringify(data) }),
     update: (id: string, data: unknown) =>
         request<unknown>(`/splitters/${id}`, {
-            method: "PUT",
+            method: "PATCH",
             body: JSON.stringify(data),
         }),
     delete: (id: string) =>
@@ -329,10 +329,10 @@ export const parse = {
             method: "POST",
             body: JSON.stringify(data),
         }),
-    getRun: (runId: string) => request<unknown>(`/parse/runs/${runId}`),
+    getRun: (runId: string) => request<unknown>(`/parse/${runId}`),
     listRuns: (limit = 20, offset = 0) =>
-        request<{ items: unknown[]; total: number }>(
-            `/parse/runs?limit=${limit}&offset=${offset}`
+        request<{ items: unknown[]; meta: { total: number; has_more: boolean; limit: number; offset: number } }>(
+            `/parse?limit=${limit}&offset=${offset}`
         ),
 };
 
@@ -347,7 +347,7 @@ export const workflows = {
         request<unknown>("/workflows", { method: "POST", body: JSON.stringify(data) }),
     update: (id: string, data: unknown) =>
         request<unknown>(`/workflows/${id}`, {
-            method: "PUT",
+            method: "PATCH",
             body: JSON.stringify(data),
         }),
     delete: (id: string) =>
@@ -373,7 +373,7 @@ export const evaluationSets = {
         }),
     update: (id: string, data: unknown) =>
         request<unknown>(`/evaluation-sets/${id}`, {
-            method: "PUT",
+            method: "PATCH",
             body: JSON.stringify(data),
         }),
     delete: (id: string) =>
@@ -412,7 +412,7 @@ export const processors = {
         request<unknown>("/processors", { method: "POST", body: JSON.stringify(data) }),
     update: (id: string, data: unknown) =>
         request<unknown>(`/processors/${id}`, {
-            method: "PUT",
+            method: "PATCH",
             body: JSON.stringify(data),
         }),
     delete: (id: string) =>
