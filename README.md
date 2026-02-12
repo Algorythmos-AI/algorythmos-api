@@ -9,7 +9,7 @@
 [![Python 3.11](https://img.shields.io/badge/python-3.11-blue.svg)](https://www.python.org)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.0-blue)](https://www.typescriptlang.org)
 
-**[🌐 Live Demo](https://api.algorythmos.fr/api/)** · **[📚 API Docs](https://api.algorythmos.fr/api/docs)**
+**[🌐 Live Demo (Frontend)](https://frontend-skalaliyas-projects.vercel.app)** · **[📚 API Docs](https://api.algorythmos.fr/api/docs)**
 
 </div>
 
