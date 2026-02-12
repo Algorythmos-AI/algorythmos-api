@@ -759,6 +759,15 @@ CreateApiKeyResponse.model_rebuild()
 # HTML builders for premium dark-theme documentation UI
 # ---------------------------------------------------------------------------
 
+# Base64-encoded Algorythmos favicons (avoids 404 on Vercel serverless)
+_FAVICON_32_B64 = "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAFgklEQVR4nKVX3W8UVRT/nTszO9t2W6CVL7HWB4hprAaJokjEgAFMDBh9wFeNf4EfL/igiVES4qOPEBIT9cWPxMCDLwaDiakihhiMgjEkFBHaUrrdfuzO7Nxjzr0zuzOzsy3VmzRzej/OPfec3/mds/Ty5mkmAggEGRRL9o9g1wrm5UsFc5lzXdZb5wguIxkiUeobz3FsQWY+WWbRljufPpebS2SOZWIxoOiSxKxYLlin/2dEPFxObbZ6xKTcS+/SCEeJyMbFZlovZ4T9usYDd/PSFTxFxJid0/BKBEcruETwytagrkYwQ4koRrS+Vmgpt2spWfRlzgDKAaZrIbYfdvDONxW89VUP7htTCJZkMd7P2TOJTC9unuTuKE/yIjuvEhST6CfUAw1nQ4QTPw3B77GvvHoxwrHnFo1HjBYuzg4lLsq/KC+3/EFsXsvEiCKg2QRIAREzymvZXB417WsH71WAz9CCg7TenCdURwhym2VoAZYCtAaqMxpBneH3AeUKUF9i6Drhz4shvj61AMe1Cj47toC5OxGUa8+39cbhiOfo8KZbNgRdiEMkxwGaDcB1CQdfLWPXCyWsH1bGqOkJjfOnQ5z9oo6a18BAvwMOCJUeB9Gki8VZhuNQd7I6tOkmF7OU3aTExQHQ269w9JMBjO6SJ3aO2xMa5QHCbz8H6O0jbB3z8PbueczeZHi+ID7PiNYAtx2hYrIQd0ms3zhRMZc3QxijBAvpMTSszHfns775LlTZnDPZVqjfpqeb4QG7u5WzymHU7jD2Hilj+76SAZjEWCwPlhjjpwPMTTMefsbDyEOOwQhrC0xzFTG0wRJ1YUzOeyBrhDCiiE+/5Kf4wb7u/SNz+PW7EJ5HKPmE109VDDYibT3URn6broqMUG1i6UzBKGKUK4QtWx1zLjn//ZcN/PJtgKEtCgPrCZFmfH58yXgoH5qEyNoZkM00lU3BbDqKS8XlBkSpMXU9gtcDc3EYAqUewnxVI6xLHchfXsAtnOcBzuVpPCc0Wq9rozyNo9EnPQQNNnwgobozqTEy5hhv6ShlQKxsOSNUp1VtT5ADLC0wLl8QyrPuF6WPHSjhlff64PdajOzY7+G1430t4up0f6d3E5n2b/y7Cw9YDmgsMrY94uGjs0MtDCQor81oLNYYG0fagU/2CFDffKpqssTUgyIeQAcVZz0hGCj3EX4/H+LjD+YNwAz3N4FmwOgfVJnLhSPkTJKOGZ0dVbQVAl4GJLbo9K0jfPrhPE6+WzMhEWC6cZUzLPiPxsmj8+aw0LZ4TvBgUzlVzAuMoH0brrea0nwpNuEwLiUocess44FRFzsP+Bje5hrAXfujifEzAapTGo/v91tNrKxd/rGJSJgzDiuKGt29HQbYC6Mwpsq4kMiQYhQssmk0xMXyPzTQv06hVCLMTurUZYTKGjL9QnKhI6/IGeFmqVhiTFia19ixx0f/GoXpGxozNzV2P+/j4rkQj+4p4cqFEE8c9PHDmQbuf9DFjb8irBlU6K0og42BQQXXI0xNRPDLyhgr1H3pXBO9FUr1ioipuNUmW1FqeK2qUV+0QHQ8xo2rEcKAce1KE7O3NS6NB7h9SyNsNE02VKcYa+9ho1yMlseyJjhuBC01REltkd6gnaTGF3s2TMQtWSo1FBA2JJBCrdLtknlZqaRMaIT/BfG+T+AoDgXb7DAhiC8xLpcHxfQoNSOfjm5RqZRXe366KQHKnnWPuFa2lSULjIH2mKSnJ5Wy8JeSBbV0RoKJNF+53foBcZVstYoY2tBV3J6RGBn/ejD+i2OadNNU3NIbJs1VXtdwfpcDq/s1VLS+sk63sB9YtRFZYK1khO32bb/h5urHfzSiS0u33Hrc9LR/nLZit5wRq3jpXa7/C7L1e98ohc04AAAAAElFTkSuQmCC"
+_FAVICON_16_B64 = "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAACMElEQVR4nG2TTWsUQRCGn+rp2cnkQ/QiiQaFiB+QgJ4EIQrxnouICJ6C3r3Eqyfv6sUfoD/Cm+BBAh5EiKB4CIK6fsXdkGSTbGZ7Sqo7myzEhh6mqruq633fKrk1sapOBIdt+N9/JoLPBAJIPNvbAl5RVEEFaoRoCMSPKiJQVdBZU4ZHhdzbvf4SnBk1OrCxlJApLoderZTjNdcWPMNHhaoXn0x3VS3BgWFbJSXZaNest5TvzR6zC567T0suzWd0Niz5waPegmKdaMTUC6A95cqNgsmzGV+WA+9e7VKOCp/fB/KhVJUYZrEEVq4aHKMHqq5y/9kYc7eLfaStHzXtv4HuT8fKUpfGiIshRpzrc4BTNjdqLl7PY3B3W3n+cIsn9zbJC+HMTE6jFHohMnQYQi2wu1tzejqjDvDpbcWLRx0qhZPnMm4ullTVQbCFWck+vm5OQ+Kg/afGZTAxlTFz1dNqKtOzPp0PqKUR8AAHRl55BJZe7tBcGeHEVMbj18cYXOWYEGJwUso48P0KYp4a2quBB/Mt7iyOcuq8Z2W5x9ePgQuXPR/eVDHYoJhilkTmjn9TM0yW8UmPBsicUFfQaAhba1AUQp5LtIshx/pvZWddY3v7BMEk1EiisSkFZI3EuHWjeCFrQAjKdqeO/qTeAIk2OL+aIQ6OmKp7g+Sd2dY4Az6f/EEtQZQjEeny1EwGKU5jf2RE96cv+lRjcJzGfRL3iDy0olpJstSxyW2J7Po/sHcmxfWlhlIAAAAASUVORK5CYII="
+_FAVICON_LINKS = (
+    f'<link rel="icon" type="image/png" sizes="32x32" href="data:image/png;base64,{_FAVICON_32_B64}"/>'
+    f'\n  <link rel="icon" type="image/png" sizes="16x16" href="data:image/png;base64,{_FAVICON_16_B64}"/>'
+    f'\n  <link rel="icon" type="image/x-icon" href="/api/favicon.ico"/>'
+)
+
 def _build_swagger_html(title: str, openapi_url: str, custom_css: str) -> str:
     """Build a complete dark-themed Swagger UI HTML page."""
     return f"""<!DOCTYPE html>
@@ -767,10 +776,7 @@ def _build_swagger_html(title: str, openapi_url: str, custom_css: str) -> str:
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <title>{title} — API Docs</title>
-  <link rel="icon" type="image/x-icon" href="/api/favicon.ico"/>
-  <link rel="icon" type="image/png" sizes="32x32" href="/api/public/favicon-32x32.png"/>
-  <link rel="icon" type="image/png" sizes="16x16" href="/api/public/favicon-16x16.png"/>
-  <link rel="apple-touch-icon" sizes="180x180" href="/api/public/apple-touch-icon.png"/>
+  {_FAVICON_LINKS}
   <link rel="preconnect" href="https://fonts.googleapis.com"/>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css"/>
@@ -806,10 +812,7 @@ def _build_landing_html() -> str:
   <title>Algorythmos API</title>
   <meta name="description" content="PDF Usage Extraction Service — Extract internet usage data from telecom PDF invoices via a modern REST API."/>
   <!-- Favicons -->
-  <link rel="icon" type="image/x-icon" href="/api/favicon.ico"/>
-  <link rel="icon" type="image/png" sizes="32x32" href="/api/public/favicon-32x32.png"/>
-  <link rel="icon" type="image/png" sizes="16x16" href="/api/public/favicon-16x16.png"/>
-  <link rel="apple-touch-icon" sizes="180x180" href="/api/public/apple-touch-icon.png"/>
+  {_FAVICON_LINKS}
   <!-- Open Graph (Facebook, LinkedIn, Slack, etc.) -->
   <meta property="og:type" content="website"/>
   <meta property="og:title" content="Algorythmos API"/>
