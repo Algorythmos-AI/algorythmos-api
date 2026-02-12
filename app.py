@@ -767,7 +767,10 @@ def _build_swagger_html(title: str, openapi_url: str, custom_css: str) -> str:
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <title>{title} — API Docs</title>
-  <link rel="icon" href="/api/favicon.ico" type="image/svg+xml"/>
+  <link rel="icon" type="image/x-icon" href="/api/favicon.ico"/>
+  <link rel="icon" type="image/png" sizes="32x32" href="/api/public/favicon-32x32.png"/>
+  <link rel="icon" type="image/png" sizes="16x16" href="/api/public/favicon-16x16.png"/>
+  <link rel="apple-touch-icon" sizes="180x180" href="/api/public/apple-touch-icon.png"/>
   <link rel="preconnect" href="https://fonts.googleapis.com"/>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css"/>
@@ -802,7 +805,25 @@ def _build_landing_html() -> str:
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <title>Algorythmos API</title>
   <meta name="description" content="PDF Usage Extraction Service — Extract internet usage data from telecom PDF invoices via a modern REST API."/>
-  <link rel="icon" href="/api/favicon.ico" type="image/svg+xml"/>
+  <!-- Favicons -->
+  <link rel="icon" type="image/x-icon" href="/api/favicon.ico"/>
+  <link rel="icon" type="image/png" sizes="32x32" href="/api/public/favicon-32x32.png"/>
+  <link rel="icon" type="image/png" sizes="16x16" href="/api/public/favicon-16x16.png"/>
+  <link rel="apple-touch-icon" sizes="180x180" href="/api/public/apple-touch-icon.png"/>
+  <!-- Open Graph (Facebook, LinkedIn, Slack, etc.) -->
+  <meta property="og:type" content="website"/>
+  <meta property="og:title" content="Algorythmos API"/>
+  <meta property="og:description" content="Extract internet usage data from telecom PDF invoices with a production-ready REST API."/>
+  <meta property="og:image" content="https://api.algorythmos.fr/api/public/og-logo.png"/>
+  <meta property="og:url" content="https://api.algorythmos.fr"/>
+  <meta property="og:site_name" content="Algorythmos"/>
+  <!-- Twitter Card -->
+  <meta name="twitter:card" content="summary"/>
+  <meta name="twitter:title" content="Algorythmos API"/>
+  <meta name="twitter:description" content="Extract internet usage data from telecom PDF invoices with a production-ready REST API."/>
+  <meta name="twitter:image" content="https://api.algorythmos.fr/api/public/og-logo.png"/>
+  <!-- PWA / Android -->
+  <meta name="theme-color" content="#6b21a8"/>
   <link rel="preconnect" href="https://fonts.googleapis.com"/>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet"/>
   <style>
@@ -867,7 +888,7 @@ def _build_landing_html() -> str:
   <div class="container">
     <header>
       <div class="logo-row">
-        <svg class="logo-icon" viewBox="0 0 32 32"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#6366f1"/><stop offset="100%" stop-color="#a855f7"/></linearGradient></defs><rect width="32" height="32" rx="6" fill="url(#g)"/><text x="16" y="23" text-anchor="middle" fill="white" font-family="Arial,sans-serif" font-weight="bold" font-size="20">A</text></svg>
+        <img class="logo-icon" src="/api/public/logo-128x128.png" alt="Algorythmos" style="border-radius:12px;"/>
         <span class="logo-text">Algorythmos</span>
       </div>
       <h1>PDF Usage<br/><span>Extraction API</span></h1>
@@ -1145,17 +1166,36 @@ def build_api() -> FastAPI:
     # ==================== FAVICON ====================
     @app.get("/favicon.ico", include_in_schema=False)
     async def favicon():
-        """Serve an inline SVG favicon."""
-        svg = '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
-          <defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
-            <stop offset="0%" stop-color="#6366f1"/>
-            <stop offset="100%" stop-color="#a855f7"/>
-          </linearGradient></defs>
-          <rect width="32" height="32" rx="6" fill="url(#g)"/>
-          <text x="16" y="23" text-anchor="middle" fill="white" font-family="Arial,sans-serif" font-weight="bold" font-size="20">A</text>
-        </svg>'''
-        return Response(content=svg, media_type="image/svg+xml",
-                        headers={"Cache-Control": "public, max-age=86400"})
+        """Serve the official Algorythmos favicon."""
+        favicon_path = Path(__file__).resolve().parent / "public" / "favicon.ico"
+        if favicon_path.exists():
+            return Response(
+                content=favicon_path.read_bytes(),
+                media_type="image/x-icon",
+                headers={"Cache-Control": "public, max-age=604800"},  # 7 days
+            )
+        # Fallback to inline SVG if file missing
+        svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#6366f1"/><stop offset="100%" stop-color="#a855f7"/></linearGradient></defs><rect width="32" height="32" rx="6" fill="url(#g)"/><text x="16" y="23" text-anchor="middle" fill="white" font-family="Arial,sans-serif" font-weight="bold" font-size="20">A</text></svg>'
+        return Response(content=svg, media_type="image/svg+xml")
+
+    # ==================== PUBLIC STATIC FILES ====================
+    @app.get("/public/{filename:path}", include_in_schema=False)
+    async def serve_public(filename: str):
+        """Serve branding assets from the public/ directory."""
+        import mimetypes
+        public_dir = Path(__file__).resolve().parent / "public"
+        file_path = (public_dir / filename).resolve()
+        # Security: prevent path traversal
+        if not str(file_path).startswith(str(public_dir)):
+            raise HTTPException(status_code=403, detail="Forbidden")
+        if not file_path.exists() or not file_path.is_file():
+            raise HTTPException(status_code=404, detail="Not found")
+        mime, _ = mimetypes.guess_type(str(file_path))
+        return Response(
+            content=file_path.read_bytes(),
+            media_type=mime or "application/octet-stream",
+            headers={"Cache-Control": "public, max-age=604800"},  # 7 days
+        )
 
     # ==================== LANDING PAGE ====================
     @app.get("/", tags=["health"], summary="API landing page", include_in_schema=False)
