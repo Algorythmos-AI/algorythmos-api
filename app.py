@@ -1584,7 +1584,7 @@ def build_api() -> FastAPI:
         request: Request,
         payload: CreateApiKeyRequest,
         user: "UserDB" = Depends(require_authenticated_user),
-        session: AsyncSession = Depends(get_session),
+        session = Depends(get_session),
     ) -> CreateApiKeyResponse:
         """Create a new API key for the authenticated user."""
         from models_api_key import ApiKeyDB
@@ -1652,7 +1652,7 @@ def build_api() -> FastAPI:
     async def list_api_keys(
         request: Request,
         user: "UserDB" = Depends(require_authenticated_user),
-        session: AsyncSession = Depends(get_session),
+        session = Depends(get_session),
     ) -> List[ApiKeyResponse]:
         """List all API keys for the authenticated user."""
         from models_api_key import ApiKeyDB
@@ -1693,7 +1693,7 @@ def build_api() -> FastAPI:
         request: Request,
         key_id: str = PathParam(..., description="API key ID to revoke"),
         user: "UserDB" = Depends(require_authenticated_user),
-        session: AsyncSession = Depends(get_session),
+        session = Depends(get_session),
     ):
         """Revoke an API key (soft delete)."""
         from models_api_key import ApiKeyDB

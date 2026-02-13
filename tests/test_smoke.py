@@ -39,7 +39,7 @@ def test_health_endpoint_without_api_prefix(client):
 
 def test_cors_headers(client):
     """Test that CORS headers are properly set."""
-    response = client.get("/api/alg/healthz", headers={"Origin": "https://example.com"})
+    response = client.get("/api/alg/healthz", headers={"Origin": "http://localhost:3000"})
     # Basic check that CORS middleware is working
     assert response.status_code == 200
     # Should have CORS headers (though they may vary based on configuration)

@@ -27,10 +27,11 @@ check_www_redirect() {
   code="$(echo "$headers" | awk 'NR==1 {print $2}')"
   location="$(echo "$headers" | awk -F': ' 'tolower($1)=="location" {print $2}' | tr -d '\r' | tail -n 1)"
 
-  if [[ "$code" == "301" && "$location" == https://algorythmos.com* ]]; then
-    echo "PASS WWW redirect: ${url} -> ${location} (HTTP 301)"
+  # Permanent redirects are valid as either 301 or 308 depending on edge platform defaults.
+  if [[ ( "$code" == "301" || "$code" == "308" ) && "$location" == https://algorythmos.com* ]]; then
+    echo "PASS WWW redirect: ${url} -> ${location} (HTTP ${code})"
   else
-    echo "FAIL WWW redirect: expected 301 to https://algorythmos.com*, got code=${code:-000}, location=${location:-<none>}"
+    echo "FAIL WWW redirect: expected 301 or 308 to https://algorythmos.com*, got code=${code:-000}, location=${location:-<none>}"
     failures=$((failures + 1))
   fi
 }
