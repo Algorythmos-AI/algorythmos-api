@@ -29,6 +29,8 @@ interface VersionData {
     environment: string;
 }
 
+type CapabilitiesData = Awaited<ReturnType<typeof health.capabilities>>;
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type RunItem = Record<string, any>;
 
@@ -37,7 +39,7 @@ export default function DashboardPage() {
     const [versionData, setVersionData] = useState<VersionData | null>(null);
     const [recentRuns, setRecentRuns] = useState<RunItem[]>([]);
     const [schemaCount, setSchemaCount] = useState<number | null>(null);
-    const [capabilities, setCapabilities] = useState<{ supported_formats: string[]; limits: any } | null>(null);
+    const [capabilities, setCapabilities] = useState<CapabilitiesData | null>(null);
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
@@ -50,7 +52,7 @@ export default function DashboardPage() {
                 ]);
                 if (h.status === "fulfilled") setHealthData(h.value as HealthData);
                 if (v.status === "fulfilled") setVersionData(v.value as VersionData);
-                if (c.status === "fulfilled") setCapabilities(c.value as any);
+                if (c.status === "fulfilled") setCapabilities(c.value as CapabilitiesData);
 
                 // Try to load runs and schemas
                 try {

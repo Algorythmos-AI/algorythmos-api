@@ -1,14 +1,18 @@
 import type { NextConfig } from "next";
 
+const apiBaseUrl = (
+    process.env.NEXT_PUBLIC_API_BASE_URL ||
+    process.env.NEXT_PUBLIC_API_URL ||
+    "https://api.algorythmos.com/api"
+).replace(/\/+$/, "");
+
 const nextConfig: NextConfig = {
     output: "standalone",
     async rewrites() {
         return [
             {
                 source: "/api/:path*",
-                destination: process.env.NEXT_PUBLIC_API_URL
-                    ? `${process.env.NEXT_PUBLIC_API_URL}/:path*`
-                    : "https://api.algorythmos.fr/api/:path*",
+                destination: `${apiBaseUrl}/:path*`,
             },
         ];
     },
