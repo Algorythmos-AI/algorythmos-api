@@ -155,6 +155,12 @@ async def app_client():
         yield client
 
 
+@pytest_asyncio.fixture
+async def client(app_client: AsyncClient):
+    """Backward-compatible alias for tests that still request `client`."""
+    yield app_client
+
+
 @pytest.fixture
 def sign_v1():
     """Generate a v1 signature header for webhook payloads."""

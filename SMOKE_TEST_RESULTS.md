@@ -106,7 +106,7 @@ The `/vendor/healthz` endpoint is production-ready. Recommended monitoring:
 
 ```bash
 # Health check every 30 seconds
-watch -n 30 'curl -s http://api.algorythmos.fr/api/vendor/healthz -w "\nTime: %{time_total}s\n"'
+watch -n 30 'curl -s http://api.algorythmos.com/api/vendor/healthz -w "\nTime: %{time_total}s\n"'
 
 # Kubernetes readiness probe
 readinessProbe:

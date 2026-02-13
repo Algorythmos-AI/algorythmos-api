@@ -31,7 +31,7 @@ class Settings(BaseSettings):
     
     # New settings for Stage 1
     API_BASE: str = Field(
-        default="https://api.algorythmos.fr",
+        default="https://api.algorythmos.com",
         description="Base API URL"
     )
     CORS_ORIGINS: str = Field(
