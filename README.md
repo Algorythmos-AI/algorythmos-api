@@ -1,190 +1,154 @@
-<div align="center">
+# Algorythmos Platform
 
-# 📄 Algorythmos — Document Intelligence Platform
+Algorythmos is a split-stack document intelligence platform:
+- Backend API (FastAPI) from repository root.
+- Frontend app (Next.js) from `/frontend`.
 
-### Enterprise-grade document extraction & analysis platform
+Canonical production domains:
+- Marketing: `https://algorythmos.com`
+- Frontend app: `https://app.algorythmos.com`
+- API: `https://api.algorythmos.com`
+- WWW redirect: `https://www.algorythmos.com` -> `https://algorythmos.com`
 
-[![Next.js 14](https://img.shields.io/badge/Next.js-14-black)](https://nextjs.org)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.117+-00a393.svg?logo=fastapi)](https://fastapi.tiangolo.com)
-[![Python 3.11](https://img.shields.io/badge/python-3.11-blue.svg)](https://www.python.org)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5.0-blue)](https://www.typescriptlang.org)
+## 1) What this project is
+This repo contains the API and app used to upload/process documents, manage extraction schemas, and operate enterprise document workflows.
 
-**[🌐 Live Demo (Frontend)](https://frontend-skalaliyas-projects.vercel.app)** · **[📚 API Docs](https://api.algorythmos.fr/api/docs)**
-
-</div>
-
----
-
-## What is this?
-
-**Algorythmos** is a full-stack document intelligence platform that automates data extraction from complex documents (invoices, contracts, forms).
-
-It consists of two parts:
-1.  **Frontend (Next.js 14)**: A modern, enterprise dashboard for managing files, schemas, and reviewing extracted data.
-2.  **Backend (FastAPI)**: A high-performance API that handles PDF parsing, OCR, and data extraction.
-
-### ✨ Key Features
-
--   **Drag & Drop Upload**: Upload PDFs and see extraction results instantly.
--   **Schema Management**: Define exactly what data you want to extract (fields, types, descriptions).
--   **LLM Studio**: Experiment with AI-powered summarization, Q&A, and entity extraction.
--   **Dashboard**: Real-time health metrics, recent runs, and system status.
--   **API Key Management**: Generate and revoke keys for programmatic access.
--   **Multi-tenant**: Built for enterprise with data isolation per tenant.
-
----
-
-## 🚀 Quick Start (Full Stack)
-
-Follow these steps to run the entire platform locally.
-
-### Prerequisites
--   **Node.js 18+** (for frontend)
--   **Python 3.11** (for backend)
--   **Git**
-
-### 1. Download the project
-```bash
-git clone https://github.com/skalaliya/api-algorythmos.git
-cd api-algorythmos
-```
-
-### 2. Setup Backend (API)
-The backend runs on port `8000`.
-
-```bash
-# Install dependencies using uv (or pip)
-curl -LsSf https://astral.sh/uv/install.sh | sh
-uv sync
-
-# Create environment file
-cat > .env << EOF
-ALG_API_KEY=test-api-key
-ALG_TENANT_ID=test-tenant
-ENV=dev
-EOF
-
-# Initialize database
-uv run alembic upgrade head
-
-# Start server
-uv run uvicorn app:app --reload
-```
-*Backend is now running at [http://localhost:8000](http://localhost:8000)*
-
-### 3. Setup Frontend (Dashboard)
-The frontend runs on port `3000`. Open a new terminal tab:
-
-```bash
-cd frontend
-
-# Install dependencies
-npm install
-
-# Create environment file
-cat > .env.local << EOF
-NEXT_PUBLIC_API_URL=http://localhost:8000/api
-EOF
-
-# Start development server
-npm run dev
-```
-*Frontend is now running at [http://localhost:3000](http://localhost:3000)*
-
----
-
-## 🛠 Usage Guide
-
-### 1. Access the Dashboard
-Open **[http://localhost:3000](http://localhost:3000)** in your browser.
-
-### 2. Configure Authentication
-To connect the frontend to your local backend:
-1.  Go to **Settings** → **API Keys**.
-2.  Enter the key `test-api-key` (configured in your backend `.env`).
-3.  The frontend will now authenticate all requests using this key.
-
-### 3. Upload & Extract
-1.  Navigate to **Upload & Extract**.
-2.  Drag and drop a PDF file (e.g., an invoice).
-3.  Select a Schema (or use "Auto-detect").
-4.  Click **Extract Data**.
-5.  View the JSON results or Table view side-by-side with the PDF.
-
----
-
-## ⚙️ Configuration
-
-### Backend Environment (`.env`)
-| Variable | Required | Description |
-|----------|:--------:|-------------|
-| `ALG_API_KEY` | ✅ | Master API key for correct operation. |
-| `ALG_TENANT_ID` | ✅ | Default tenant ID for local dev. |
-| `DATABASE_URL` | No | SQLite used by default (`./dev.db`). Use Postgres for prod. |
-| `STATE_BACKEND` | No | `memory` (default) or `redis`. |
-
-### Frontend Environment (`frontend/.env.local`)
-| Variable | Required | Description |
-|----------|:--------:|-------------|
-| `NEXT_PUBLIC_API_URL` | ✅ | URL of the backend API (e.g., `http://localhost:8000/api`). |
-| `NEXT_PUBLIC_GOOGLE_CLIENT_ID`| No | For Google Sign-In (optional). |
-
----
-
-## 🏗 Project Structure
-
-```bash
+## 2) Monorepo layout
+```text
 api-algorythmos/
-├── app.py                  # Backend Entry Point (FastAPI)
-├── app/                    # Backend Core Logic
-├── document_processing/    # PDF Extraction Engine
-├── alembic/                # Database Migrations
-├── tests/                  # Backend Tests
-│
-└── frontend/               # Frontend Application (Next.js)
-    ├── app/                # App Router Pages (Dashboard, Upload, etc.)
-    ├── components/         # React Components (UI Library)
-    ├── lib/                # API Client & Utilities
-    └── public/             # Static Assets
+├── api/                         # Vercel serverless entrypoint for backend
+│   └── index.py
+├── app.py                       # FastAPI application entrypoint
+├── app/                         # Backend modules
+├── document_processing/         # Processing runtime/workers
+├── tests/                       # Backend tests
+├── scripts/                     # Verification and utility scripts
+├── docs/                        # Architecture/deployment docs
+├── vercel.json                  # Backend Vercel config (root project)
+├── .env.example                 # Backend env template
+└── frontend/                    # Frontend Next.js project
+    ├── app/
+    ├── components/
+    ├── lib/
+    ├── package.json
+    ├── .env.example
+    └── next.config.ts
 ```
 
----
-
-## 🧪 Testing
-
-### Backend Tests
+## 3) Local development quickstart
+### Backend
 ```bash
-# Run unit tests
-uv run pytest
-
-# Run API verification script (tests live endpoints)
-./verify_api.sh
+cp .env.example .env
+python3 -m pip install -r requirements.txt
+python3 -m uvicorn app:app --reload
 ```
 
-### Frontend Tests
+Backend will be available at `http://localhost:8000`.
+
+### Frontend
 ```bash
-cd frontend
-# Generate test PDFs
-node generate_pdfs.js
+cp frontend/.env.example frontend/.env.local
+npm --prefix frontend ci
+npm --prefix frontend run dev
 ```
 
----
+Frontend will be available at `http://localhost:3000`.
 
-## 🚢 Deployment
+## 4) Testing commands
+### Backend
+```bash
+python3 -m pytest -q
+```
 
-### Vercel (Recommended)
-This repo is configured for Vercel. Both the Next.js frontend and Python backend can be deployed to Vercel.
+### Frontend
+```bash
+npm --prefix frontend ci
+npm --prefix frontend run lint
+npm --prefix frontend run typecheck
+npm --prefix frontend run build
+```
 
-1.  Push your code to GitHub.
-2.  Import the repo in Vercel.
-3.  Set the Environment Variables in Vercel project settings.
-4.  Deploy!
+### Verification helpers
+```bash
+./scripts/verify_env_contract.sh
+./scripts/verify_local_stack.sh
+./scripts/verify_domains.sh
+```
 
----
+## 5) Deployment model
+This is deployed as two Vercel projects from one repository:
+- Backend project:
+  Root directory: `/`
+  Uses `vercel.json` at repo root
+  Serves `api.algorythmos.com`
+- Frontend project:
+  Root directory: `/frontend`
+  Standard Next.js build (`npm run build`)
+  Serves `app.algorythmos.com`
 
-<div align="center">
-  <br/>
-  Built with ❤️ by Algorythmos Team
-  <br/>
-  <a href="https://api.algorythmos.fr/api/docs">API Documentation</a> · <a href="https://github.com/skalaliya/api-algorythmos/issues">Report Bug</a>
-</div>
+A separate marketing project (outside this repo) serves `algorythmos.com`.
+
+## 6) Custom domain model
+- `algorythmos.com`: canonical brand/marketing domain.
+- `www.algorythmos.com`: permanent redirect to apex.
+- `app.algorythmos.com`: user-facing application.
+- `api.algorythmos.com`: API domain.
+- Optional later: `status.algorythmos.com`, `docs.algorythmos.com`.
+
+Legacy domain compatibility:
+- Keep legacy domains active during migration.
+- Configure permanent redirects where safe.
+- For API clients that do not follow redirects reliably, keep legacy API domain live until client migration is complete.
+
+## 7) Environment variables
+| Scope | Variable | Required | Example | Notes |
+|---|---|---|---|---|
+| Backend | `ALG_API_KEY` | Yes | `replace-with-secure-api-key` | Required for API auth.
+| Backend | `ALG_TENANT_ID` | Yes | `default` | Default tenant.
+| Backend | `ENV` | Yes | `dev` or `prod` | Runtime mode.
+| Backend | `API_BASE` | No | `https://api.algorythmos.com` | Canonical API hostname.
+| Backend | `CORS_ORIGINS` | Yes in prod | `https://app.algorythmos.com,http://localhost:3000` | Use explicit origins in prod.
+| Backend | `REDIS_URL` | Yes in prod | `redis://...` | Required for production distributed state.
+| Backend | `GOOGLE_CLIENT_ID` | Recommended, required in prod by policy | `<client-id>` | Audience validation.
+| Frontend | `NEXT_PUBLIC_API_BASE_URL` | Yes | `https://api.algorythmos.com/api` | Canonical frontend API base.
+| Frontend | `NEXT_PUBLIC_API_URL` | Legacy fallback | `https://api.algorythmos.com/api` | Backward-compatible alias.
+| Frontend | `NEXT_PUBLIC_GOOGLE_CLIENT_ID` | Optional | `<client-id>` | Google OAuth in UI.
+
+## 8) Troubleshooting
+- Frontend cannot reach API:
+  Verify `NEXT_PUBLIC_API_BASE_URL` in `frontend/.env.local`.
+  Confirm backend health: `curl http://localhost:8000/alg/healthz`.
+- CORS errors in browser:
+  Set explicit `CORS_ORIGINS` including `http://localhost:3000` and `https://app.algorythmos.com`.
+- Backend fails to start:
+  Run `./scripts/verify_env_contract.sh` and fill missing variables.
+- Deployment health checks fail:
+  Run `./scripts/verify_domains.sh` to see redirect and endpoint diagnostics.
+
+## 9) Manual Vercel steps
+These steps require Vercel UI and are not automated by repository code.
+
+1. Create or verify backend Vercel project.
+2. Set backend project Root Directory to repository root (`/`).
+3. Confirm backend environment variables from `.env.example` are set in Vercel.
+4. Add production domain `api.algorythmos.com` to backend project.
+5. Create or verify frontend Vercel project.
+6. Set frontend project Root Directory to `frontend`.
+7. Confirm frontend environment variables from `frontend/.env.example` are set in Vercel.
+8. Add production domain `app.algorythmos.com` to frontend project.
+9. In marketing project/domain settings, configure `www.algorythmos.com` -> `algorythmos.com` as permanent redirect (301).
+10. If legacy domains are still in use, configure redirect or alias behavior and rollout plan before decommissioning.
+
+## 10) Go-live DNS checklist
+Record intent only (provider-specific values omitted):
+- Apex `algorythmos.com`: ALIAS/ANAME/A to marketing host.
+- `www`: CNAME to marketing host with 301 redirect to apex.
+- `app`: CNAME/ALIAS to frontend Vercel target.
+- `api`: CNAME/ALIAS to backend Vercel target.
+- Optional `status`: reserved CNAME/ALIAS for future status provider.
+- Optional `docs`: reserved CNAME/ALIAS for future docs host.
+
+## Additional docs
+- Baseline snapshot: `docs/PROJECT_BASELINE.md`
+- Deployment architecture: `docs/DEPLOYMENT_ARCHITECTURE.md`
+- Deployment matrix: `docs/DEPLOYMENT_MATRIX.md`

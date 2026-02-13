@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-API_BASE="${API_BASE:-https://api.algorythmos.fr}"   # set to http://localhost:8080/api for local
+API_BASE="${API_BASE:-https://api.algorythmos.com}"   # set to http://localhost:8080/api for local
 URL="${API_BASE%/}/vendor/healthz"
 THRESHOLD="${VENDOR_HEALTH_FAST_SEC:-1.0}"
 

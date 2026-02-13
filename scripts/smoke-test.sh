@@ -3,7 +3,7 @@
 
 set -e
 
-API_BASE=${API_BASE:-"https://api.algorythmos.fr"}
+API_BASE=${API_BASE:-"https://api.algorythmos.com"}
 
 echo "🔍 Testing API endpoints..."
 

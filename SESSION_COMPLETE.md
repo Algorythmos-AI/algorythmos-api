@@ -11,7 +11,7 @@
 ### 1️⃣ Fix Vercel Deployment Issues ✅
 - ✅ **Circular Import** - Resolved by moving Base to root database.py
 - ✅ **Read-only Filesystem** - Resolved with lazy /tmp directory creation
-- ✅ **Production Deployment** - API now working at https://api-algorythmos.fr
+- ✅ **Production Deployment** - API now working at https://api.algorythmos.com
 
 ### 2️⃣ Enhance Documentation ✅
 - ✅ Created 3 comprehensive troubleshooting guides
@@ -192,10 +192,10 @@ $ VERCEL=1 python -c "from document_processing.services.file_service import UPLO
 
 ### Production Status
 ```
-✅ Production URL: https://api-algorythmos.fr
-✅ API Docs: https://api-algorythmos.fr/docs (working)
-✅ Health Check: https://api-algorythmos.fr/health (200 OK)
-✅ OpenAPI Schema: https://api-algorythmos.fr/openapi.json (valid)
+✅ Production URL: https://api.algorythmos.com
+✅ API Docs: https://api.algorythmos.com/docs (working)
+✅ Health Check: https://api.algorythmos.com/health (200 OK)
+✅ OpenAPI Schema: https://api.algorythmos.com/openapi.json (valid)
 ✅ 69 Routes: All accessible
 ```
 
@@ -378,8 +378,8 @@ Consider migrating to:
 ✅ Coverage: 95%+
 ✅ Routes: 69 (all working)
 
-Production URL: https://api-algorythmos.fr
-API Documentation: https://api-algorythmos.fr/docs
+Production URL: https://api.algorythmos.com
+API Documentation: https://api.algorythmos.com/docs
 
 STATUS: 🚀 PRODUCTION READY
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

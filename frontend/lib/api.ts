@@ -5,7 +5,15 @@
    proper auth flow for all request types.
    ============================================================ */
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "https://api.algorythmos.fr/api";
+function normalizeBaseUrl(url: string): string {
+    return url.replace(/\/+$/, "");
+}
+
+const API_BASE = normalizeBaseUrl(
+    process.env.NEXT_PUBLIC_API_BASE_URL ||
+    process.env.NEXT_PUBLIC_API_URL ||
+    "https://api.algorythmos.com/api"
+);
 
 /** Default tenant ID — can be overridden in localStorage */
 const DEFAULT_TENANT_ID = "default";

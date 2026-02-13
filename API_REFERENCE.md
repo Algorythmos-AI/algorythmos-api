@@ -5,7 +5,7 @@ Complete API documentation for the PDF Usage Extraction Service.
 ## Base URL
 
 ```
-Production: https://api.algorythmos.fr/api
+Production: https://api.algorythmos.com/api
 Local:      http://localhost:8080/api
 ```
 
@@ -29,7 +29,7 @@ All endpoints (except health checks) require authentication via API key.
 ```bash
 curl -H "X-Api-Key: your-api-key" \
      -H "X-Tenant-Id: tenant-123" \
-     https://api.algorythmos.fr/api/alg/healthz
+     https://api.algorythmos.com/api/alg/healthz
 ```
 
 ---
@@ -51,7 +51,7 @@ Health check endpoint (public, no authentication required).
 **Example:**
 
 ```bash
-curl https://api.algorythmos.fr/api/alg/healthz
+curl https://api.algorythmos.com/api/alg/healthz
 ```
 
 ---
@@ -115,7 +115,7 @@ Create a new processor run (recommended API).
 **Request (File Upload Mode):**
 
 ```bash
-curl -X POST https://api.algorythmos.fr/api/processors/demo/runs \
+curl -X POST https://api.algorythmos.com/api/processors/demo/runs \
   -H "X-Api-Key: your-key" \
   -H "X-Tenant-Id: tenant-123" \
   -H "Idempotency-Key: order-456-retry-1" \
@@ -126,7 +126,7 @@ curl -X POST https://api.algorythmos.fr/api/processors/demo/runs \
 **Request (JSON Mode - Pre-uploaded Files):**
 
 ```bash
-curl -X POST https://api.algorythmos.fr/api/processors/demo/runs \
+curl -X POST https://api.algorythmos.com/api/processors/demo/runs \
   -H "X-Api-Key: your-key" \
   -H "X-Tenant-Id: tenant-123" \
   -H "Content-Type: application/json" \
@@ -251,17 +251,17 @@ List all runs for a processor with pagination and filtering.
 
 ```bash
 # Get first page
-curl "https://api.algorythmos.fr/api/processors/demo/runs?limit=10" \
+curl "https://api.algorythmos.com/api/processors/demo/runs?limit=10" \
   -H "X-Api-Key: your-key" \
   -H "X-Tenant-Id: tenant-123"
 
 # Get next page using cursor
-curl "https://api.algorythmos.fr/api/processors/demo/runs?limit=10&cursor=eyJ0aW1lIjoiMjAyNS0xMC0xOVQxMDozMDowMFoiLCJpZCI6ImFiYzEyMyJ9" \
+curl "https://api.algorythmos.com/api/processors/demo/runs?limit=10&cursor=eyJ0aW1lIjoiMjAyNS0xMC0xOVQxMDozMDowMFoiLCJpZCI6ImFiYzEyMyJ9" \
   -H "X-Api-Key: your-key" \
   -H "X-Tenant-Id: tenant-123"
 
 # Filter by status
-curl "https://api.algorythmos.fr/api/processors/demo/runs?status=succeeded" \
+curl "https://api.algorythmos.com/api/processors/demo/runs?status=succeeded" \
   -H "X-Api-Key: your-key" \
   -H "X-Tenant-Id: tenant-123"
 ```
@@ -352,7 +352,7 @@ Upload PDF files for extraction.
 **Request:**
 
 ```bash
-curl -X POST https://api.algorythmos.fr/api/extract/upload \
+curl -X POST https://api.algorythmos.com/api/extract/upload \
   -H "X-Api-Key: your-key" \
   -F "files=@invoice.pdf" \
   -F "provider_hint=orange_france"
@@ -382,7 +382,7 @@ Extract from pre-uploaded files.
 **Request:**
 
 ```bash
-curl -X POST https://api.algorythmos.fr/api/extract/path \
+curl -X POST https://api.algorythmos.com/api/extract/path \
   -H "X-Api-Key: your-key" \
   -H "Content-Type: application/json" \
   -d '{
@@ -406,7 +406,7 @@ Create a background extraction job.
 **Request:**
 
 ```bash
-curl -X POST https://api.algorythmos.fr/api/jobs \
+curl -X POST https://api.algorythmos.com/api/jobs \
   -H "X-Api-Key: your-key" \
   -H "Content-Type: application/json" \
   -d '{
@@ -574,7 +574,7 @@ Currently not enforced at the API level. Configure rate limiting at the infrastr
 Include an `Idempotency-Key` header to make requests idempotent:
 
 ```bash
-curl -X POST https://api.algorythmos.fr/api/processors/demo/runs \
+curl -X POST https://api.algorythmos.com/api/processors/demo/runs \
   -H "X-Api-Key: your-key" \
   -H "X-Tenant-Id: tenant-123" \
   -H "Idempotency-Key: order-456-attempt-1" \
@@ -611,15 +611,15 @@ All list endpoints use **cursor-based pagination** for efficiency.
 
 ```bash
 # Page 1
-curl "https://api.algorythmos.fr/api/processors/demo/runs?limit=10"
+curl "https://api.algorythmos.com/api/processors/demo/runs?limit=10"
 # Response: {"runs": [...], "next_cursor": "abc123", "has_more": true}
 
 # Page 2
-curl "https://api.algorythmos.fr/api/processors/demo/runs?limit=10&cursor=abc123"
+curl "https://api.algorythmos.com/api/processors/demo/runs?limit=10&cursor=abc123"
 # Response: {"runs": [...], "next_cursor": "def456", "has_more": true}
 
 # Page 3
-curl "https://api.algorythmos.fr/api/processors/demo/runs?limit=10&cursor=def456"
+curl "https://api.algorythmos.com/api/processors/demo/runs?limit=10&cursor=def456"
 # Response: {"runs": [...], "next_cursor": null, "has_more": false}
 ```
 
@@ -637,7 +637,7 @@ curl "https://api.algorythmos.fr/api/processors/demo/runs?limit=10&cursor=def456
 Interactive API documentation available at:
 
 ```
-https://api.algorythmos.fr/api/docs
+https://api.algorythmos.com/api/docs
 ```
 
 Features:
@@ -655,7 +655,7 @@ Features:
 ```python
 import httpx
 
-API_BASE = "https://api.algorythmos.fr/api"
+API_BASE = "https://api.algorythmos.com/api"
 API_KEY = "your-api-key"
 TENANT_ID = "tenant-123"
 
@@ -694,7 +694,7 @@ if run["status"] == "succeeded":
 ### JavaScript/TypeScript
 
 ```typescript
-const API_BASE = "https://api.algorythmos.fr/api";
+const API_BASE = "https://api.algorythmos.com/api";
 const API_KEY = "your-api-key";
 const TENANT_ID = "tenant-123";
 
@@ -735,7 +735,7 @@ while (status !== "succeeded" && status !== "failed") {
 ```bash
 #!/bin/bash
 
-API_BASE="https://api.algorythmos.fr/api"
+API_BASE="https://api.algorythmos.com/api"
 API_KEY="your-api-key"
 TENANT_ID="tenant-123"
 
@@ -778,4 +778,4 @@ See [CHANGELOG.md](./CHANGELOG.md) for version history and migration guides.
 - **Documentation**: [README.md](./README.md)
 - **Deployment**: [DEPLOYMENT_GUIDE.md](./DEPLOYMENT_GUIDE.md)
 - **Issues**: GitHub Issues
-- **Email**: support@algorythmos.fr
+- **Email**: support@algorythmos.com
