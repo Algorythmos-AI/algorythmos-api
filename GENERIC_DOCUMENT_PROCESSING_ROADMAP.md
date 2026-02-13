@@ -1,7 +1,7 @@
 # Generic Document Processing Roadmap
 
 ## 🎯 Goal
-Transform `api.algorythmos.fr` from a specialized telecom invoice extractor into a **full-featured document processing platform** supporting:
+Transform `api.algorythmos.com` from a specialized telecom invoice extractor into a **full-featured document processing platform** supporting:
 
 - Custom extraction schemas
 - Document splitting

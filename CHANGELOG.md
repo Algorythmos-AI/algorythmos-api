@@ -178,7 +178,7 @@ Add Prometheus scraping:
 scrape_configs:
   - job_name: 'api-algorythmos'
     static_configs:
-      - targets: ['api.algorythmos.fr:443']
+      - targets: ['api.algorythmos.com:443']
     metrics_path: '/api/metrics'
     scheme: 'https'
 ```

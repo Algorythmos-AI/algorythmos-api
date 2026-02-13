@@ -484,8 +484,8 @@ OK: fast (<= 1.0s)
 - `ALG_TENANT_ID` - Default tenant identifier
 
 ### Optional
-- `API_BASE` - Base API URL (default: https://api.algorythmos.fr)
-- `CORS_ORIGINS` - Allowed origins (default: localhost,app.algorythmos.fr)
+- `API_BASE` - Base API URL (default: https://api.algorythmos.com)
+- `CORS_ORIGINS` - Allowed origins (default: localhost,app.algorythmos.com)
 - `ENV` - Environment (dev/staging/prod)
 - `LOG_LEVEL` - Logging level (INFO/DEBUG/WARNING/ERROR)
 - `RATE_PER_MIN` - Rate limit per tenant (default: 120)
