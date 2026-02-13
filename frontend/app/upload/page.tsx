@@ -191,6 +191,7 @@ export default function UploadPage() {
                     onChange={(e) => setProvider(e.target.value)}
                 >
                     <option value="">Auto-detect provider</option>
+                    <option value="google">Google Vision OCR</option>
                     <option value="orange">Orange</option>
                     <option value="generic_telco">Generic Telco</option>
                 </select>

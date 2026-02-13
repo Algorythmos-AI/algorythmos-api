@@ -6,9 +6,14 @@ import { health } from "@/lib/api";
 import { capitalize } from "@/lib/utils";
 import styles from "./TopBar.module.css";
 
+import { useAuth } from "@/lib/auth-context";
+import Link from "next/link";
+import Image from "next/image";
+
 export default function TopBar() {
     const pathname = usePathname();
     const [env, setEnv] = useState<string>("dev");
+    const { user, logout } = useAuth();
 
     useEffect(() => {
         health.version()
@@ -33,9 +38,29 @@ export default function TopBar() {
                 <span className={`${styles.envBadge} ${styles[env]}`}>
                     {env}
                 </span>
-                <button className={styles.userButton} title="User menu">
-                    A
-                </button>
+
+                {user ? (
+                    <div className={styles.userProfile} onClick={logout} title="Click to Sign Out">
+                        {user.picture ? (
+                            <Image
+                                src={user.picture}
+                                alt={user.name}
+                                width={32}
+                                height={32}
+                                className={styles.avatar}
+                            />
+                        ) : (
+                            <div className={styles.userAvatarFallback}>
+                                {user.name?.charAt(0) || "U"}
+                            </div>
+                        )}
+                        <span className={styles.userName}>{user.name}</span>
+                    </div>
+                ) : (
+                    <Link href="/login" className={styles.signInBtn}>
+                        Sign In
+                    </Link>
+                )}
             </div>
         </header>
     );

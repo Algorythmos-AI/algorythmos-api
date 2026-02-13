@@ -189,16 +189,16 @@ export const health = {
 // ---------- Auth ----------
 export const auth = {
     createApiKey: (name: string) =>
-        request<{ id: string; raw_key: string; prefix: string }>("/auth/api-keys", {
+        request<{ id: string; raw_key: string; prefix: string }>("/auth/keys", {
             method: "POST",
             body: JSON.stringify({ name }),
         }),
     listApiKeys: () =>
         request<{ items: Array<{ id: string; name: string; prefix: string; is_active: boolean; created_at: string; last_used_at: string | null }> }>(
-            "/auth/api-keys"
+            "/auth/keys"
         ),
     revokeApiKey: (id: string) =>
-        request<void>(`/auth/api-keys/${id}`, { method: "DELETE" }),
+        request<void>(`/auth/keys/${id}`, { method: "DELETE" }),
 };
 
 // ---------- Schemas ----------

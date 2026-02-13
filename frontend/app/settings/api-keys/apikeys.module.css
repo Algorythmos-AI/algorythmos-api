@@ -214,8 +214,35 @@
 }
 
 .apiKeyInput .input {
-    flex: 1;
+    width: 100%;
     max-width: none;
+    padding-right: 60px;
+}
+
+.inputWrapper {
+    flex: 1;
+    position: relative;
+    display: flex;
+    align-items: center;
+}
+
+.toggleBtn {
+    position: absolute;
+    right: 8px;
+    background: transparent;
+    border: none;
+    color: var(--text-tertiary);
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    padding: 4px 8px;
+    border-radius: var(--radius-sm);
+    transition: all var(--transition-fast);
+}
+
+.toggleBtn:hover {
+    color: var(--text-primary);
+    background: rgba(148, 163, 184, 0.1);
 }
 
 .saveBtn {
