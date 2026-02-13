@@ -818,14 +818,14 @@ def _build_landing_html() -> str:
   <meta property="og:type" content="website"/>
   <meta property="og:title" content="Algorythmos API"/>
   <meta property="og:description" content="Extract internet usage data from telecom PDF invoices with a production-ready REST API."/>
-  <meta property="og:image" content="https://api.algorythmos.fr/api/public/og-logo.png"/>
-  <meta property="og:url" content="https://api.algorythmos.fr"/>
+  <meta property="og:image" content="https://api.algorythmos.com/api/public/og-logo.png"/>
+  <meta property="og:url" content="https://api.algorythmos.com"/>
   <meta property="og:site_name" content="Algorythmos"/>
   <!-- Twitter Card -->
   <meta name="twitter:card" content="summary"/>
   <meta name="twitter:title" content="Algorythmos API"/>
   <meta name="twitter:description" content="Extract internet usage data from telecom PDF invoices with a production-ready REST API."/>
-  <meta name="twitter:image" content="https://api.algorythmos.fr/api/public/og-logo.png"/>
+  <meta name="twitter:image" content="https://api.algorythmos.com/api/public/og-logo.png"/>
   <!-- PWA / Android -->
   <meta name="theme-color" content="#6b21a8"/>
   <link rel="preconnect" href="https://fonts.googleapis.com"/>
@@ -1228,7 +1228,7 @@ def build_api() -> FastAPI:
 
             # Add custom metadata
             openapi_schema["info"]["x-logo"] = {
-                "url": "https://api.algorythmos.fr/logo.png"
+                "url": "https://api.algorythmos.com/logo.png"
             }
 
             app.openapi_schema = openapi_schema
@@ -1288,6 +1288,11 @@ def build_api() -> FastAPI:
     @app.get("/alg/healthz", tags=["health"])
     async def healthz() -> dict[str, str]:
         """Health check endpoint."""
+        return {"status": "ok"}
+
+    @app.get("/health", tags=["health"], include_in_schema=False)
+    async def health() -> dict[str, str]:
+        """Compatibility health endpoint for infrastructure checks."""
         return {"status": "ok"}
 
     # Version endpoint (public)
