@@ -92,11 +92,11 @@ from app import app
 ### Production Testing (After Deployment)
 ```bash
 # Test OpenAPI endpoint
-curl https://api.algorythmos.fr/api/openapi.json
+curl https://api.algorythmos.com/api/openapi.json
 # Should return valid JSON with OpenAPI 3.1.0 schema
 
 # Test Swagger UI
-open https://api.algorythmos.fr/docs
+open https://api.algorythmos.com/docs
 # Should load interactive API documentation
 ```
 

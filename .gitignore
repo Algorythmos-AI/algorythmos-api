@@ -153,3 +153,5 @@ $RECYCLE.BIN/
 /files/
 .vercel
 .env*.local
+!.env.example
+!frontend/.env.example

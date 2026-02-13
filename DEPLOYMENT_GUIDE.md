@@ -169,7 +169,7 @@ RUN_MAX_FILES=50
 RUN_MAX_FILE_BYTES=10485760
 
 # CORS (optional)
-CORS_ORIGINS=https://app.algorythmos.fr,https://admin.algorythmos.fr
+CORS_ORIGINS=https://app.algorythmos.com,https://admin.algorythmos.com
 ```
 
 Operational state policy:
@@ -286,7 +286,7 @@ vercel --prod
 
 ```bash
 # Add domain
-vercel domains add api.algorythmos.fr
+vercel domains add api.algorythmos.com
 
 # Configure DNS
 # Add CNAME record: api -> cname.vercel-dns.com
@@ -457,7 +457,7 @@ scrape_configs:
     metrics_path: '/api/metrics'
     scheme: 'https'
     static_configs:
-      - targets: ['api.algorythmos.fr']
+      - targets: ['api.algorythmos.com']
     basic_auth:
       username: 'prometheus'
       password: 'your-prometheus-password'
@@ -572,13 +572,13 @@ vercel logs --output logs.txt
 **Uptime Monitoring:**
 ```bash
 # Pingdom, UptimeRobot, or custom script
-curl -f https://api.algorythmos.fr/api/alg/healthz || alert
+curl -f https://api.algorythmos.com/api/alg/healthz || alert
 ```
 
 **Synthetic Monitoring:**
 ```bash
 # scripts/smoke-test.sh
-API_BASE=https://api.algorythmos.fr/api ./scripts/smoke-test.sh
+API_BASE=https://api.algorythmos.com/api ./scripts/smoke-test.sh
 ```
 
 ---
@@ -622,7 +622,7 @@ ALTER DATABASE api_algorythmos SET ssl TO on;
 # config.py - Restrict origins in production
 CORS_ORIGINS = os.getenv(
     "CORS_ORIGINS",
-    "https://app.algorythmos.fr,https://admin.algorythmos.fr"
+    "https://app.algorythmos.com,https://admin.algorythmos.com"
 )
 ```
 
@@ -791,7 +791,7 @@ import logging
 logging.getLogger('sqlalchemy.engine').setLevel(logging.INFO)
 
 # Monitor metrics
-curl https://api.algorythmos.fr/api/metrics | grep duration
+curl https://api.algorythmos.com/api/metrics | grep duration
 
 # Check vendor latency
 # Look for vendor_request_duration_seconds metric
@@ -831,15 +831,15 @@ tail -f logs/app.log
 
 ```bash
 # Basic health
-curl https://api.algorythmos.fr/api/alg/healthz
+curl https://api.algorythmos.com/api/alg/healthz
 
 # Database health
-curl https://api.algorythmos.fr/api/alg/version \
+curl https://api.algorythmos.com/api/alg/version \
   -H "X-Api-Key: $API_KEY" \
   -H "X-Tenant-Id: test"
 
 # Full smoke test
-API_BASE=https://api.algorythmos.fr/api \
+API_BASE=https://api.algorythmos.com/api \
 ALG_API_KEY=$API_KEY \
 ./scripts/smoke-test.sh
 ```
@@ -965,7 +965,7 @@ Before going live, verify:
 - **Changelog**: [CHANGELOG.md](./CHANGELOG.md)
 - **Issues**: GitHub Issues
 - **Monitoring**: Grafana Dashboard
-- **Status Page**: https://status.algorythmos.fr
+- **Status Page**: https://status.algorythmos.com
 
 ---
 
