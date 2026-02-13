@@ -43,8 +43,14 @@ WEBHOOK_REPLAY_TTL_S: int = getattr(_app_entry, "WEBHOOK_REPLAY_TTL_S", 300)
 WEBHOOK_REPLAY_WINDOW_S: int = getattr(_app_entry, "WEBHOOK_REPLAY_WINDOW_S", 60)
 _processor_runs: Any = getattr(_app_entry, "_processor_runs", {})
 
+
+def create_app() -> Any:
+    """Compatibility factory used by older tests and integration harnesses."""
+    return app
+
 __all__ = [
     "app",
+    "create_app",
     "RUN_MAX_FILE_BYTES",
     "RUN_MAX_FILES",
     "WEBHOOK_REPLAY_TTL_S",

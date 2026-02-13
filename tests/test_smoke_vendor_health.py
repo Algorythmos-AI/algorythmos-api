@@ -2,7 +2,7 @@ import os, time, statistics
 import httpx
 import pytest
 
-API_BASE = os.getenv("API_BASE", "https://api.algorythmos.fr")  # set to http://localhost:8080/api for local
+API_BASE = os.getenv("API_BASE", "https://api.algorythmos.com")  # set to http://localhost:8080/api for local
 URL = f"{API_BASE.rstrip('/')}/vendor/healthz"
 
 # Fast = under 1s even if vendor is down (should return 204 when up, 502 when down)
