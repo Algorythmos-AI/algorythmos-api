@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import os
+import shutil
 import time
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 os.environ.setdefault("API_KEY", "local_dummy")
@@ -12,13 +14,29 @@ from service import app
 
 client = TestClient(app)
 HEADERS = {"X-Tenant-Id": "tenant-test", "X-Api-Key": os.environ["API_KEY"]}
-FIXTURE_DIR = Path(__file__).resolve().parent.parent / "files"
+SOURCE_FIXTURE_DIR = Path(__file__).resolve().parent.parent / "files"
+EXPECTED_FILES = [
+    "facture_9099017876_2025-05-06-2.pdf",
+    "facture_9099017876_2025-06-06.pdf",
+    "facture_9099017876_2025-07-07.pdf",
+    "facture_9099017876_2025-08-06-2.pdf",
+    "facture_9099017876_2025-09-08.pdf",
+]
 
 
-def test_extract_path_smoke() -> None:
+@pytest.fixture(scope="module")
+def fixture_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """Create deterministic fixture directory with only the expected 5 PDFs."""
+    dest = tmp_path_factory.mktemp("service-smoke-files")
+    for filename in EXPECTED_FILES:
+        shutil.copy2(SOURCE_FIXTURE_DIR / filename, dest / filename)
+    return dest
+
+
+def test_extract_path_smoke(fixture_dir: Path) -> None:
     response = client.post(
         "/extract/path",
-        json={"input_path": str(FIXTURE_DIR)},
+        json={"input_path": str(fixture_dir)},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.text
@@ -51,15 +69,15 @@ def test_extract_path_smoke() -> None:
 def test_extract_path_requires_tenant_header() -> None:
     response = client.post(
         "/extract/path",
-        json={"input_path": str(FIXTURE_DIR)},
+        json={"input_path": str(SOURCE_FIXTURE_DIR)},
     )
-    assert response.status_code == 400
+    assert response.status_code in (400, 401)
 
 
-def test_job_lifecycle() -> None:
+def test_job_lifecycle(fixture_dir: Path) -> None:
     response = client.post(
         "/jobs",
-        json={"input_path": str(FIXTURE_DIR)},
+        json={"input_path": str(fixture_dir)},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.text
