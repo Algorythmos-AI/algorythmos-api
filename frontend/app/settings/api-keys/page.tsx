@@ -23,6 +23,7 @@ export default function ApiKeysPage() {
     const [copied, setCopied] = useState(false);
     const [localKey, setLocalKey] = useState("");
     const [savedMsg, setSavedMsg] = useState(false);
+    const [showKey, setShowKey] = useState(false);
 
     useEffect(() => {
         if (typeof window !== "undefined") {
@@ -83,13 +84,22 @@ export default function ApiKeysPage() {
 
             {/* Local API Key Setting */}
             <div className={styles.apiKeyInput}>
-                <input
-                    className={styles.input}
-                    type="password"
-                    placeholder="Enter your API key (alg_...)"
-                    value={localKey}
-                    onChange={(e) => setLocalKey(e.target.value)}
-                />
+                <div className={styles.inputWrapper}>
+                    <input
+                        className={styles.input}
+                        type={showKey ? "text" : "password"}
+                        placeholder="Enter your API key (alg_...)"
+                        value={localKey}
+                        onChange={(e) => setLocalKey(e.target.value)}
+                    />
+                    <button
+                        className={styles.toggleBtn}
+                        onClick={() => setShowKey(!showKey)}
+                        type="button"
+                    >
+                        {showKey ? "Hide" : "Show"}
+                    </button>
+                </div>
                 <button className={styles.saveBtn} onClick={handleSaveLocal}>
                     <Save size={14} style={{ marginRight: 6, verticalAlign: -2 }} />
                     {savedMsg ? "Saved!" : "Save to Browser"}

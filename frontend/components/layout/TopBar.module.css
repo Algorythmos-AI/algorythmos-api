@@ -68,22 +68,60 @@
     border-color: var(--info);
 }
 
-.userButton {
-    width: 34px;
-    height: 34px;
+.userProfile {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 8px;
+    border-radius: var(--radius-full);
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border);
+    cursor: pointer;
+    transition: background 0.2s;
+}
+
+.userProfile:hover {
+    background: var(--bg-secondary);
+}
+
+.avatar {
+    border-radius: 50%;
+}
+
+.userAvatarFallback {
+    width: 32px;
+    height: 32px;
     border-radius: 50%;
     background: var(--accent-gradient);
-    border: none;
-    cursor: pointer;
+    color: white;
     display: flex;
     align-items: center;
     justify-content: center;
-    color: white;
-    font-weight: 700;
+    font-weight: 600;
     font-size: 14px;
-    transition: box-shadow var(--transition-fast);
 }
 
-.userButton:hover {
-    box-shadow: var(--accent-glow);
+.userName {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-primary);
+    max-width: 100px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.signInBtn {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-primary);
+    background: var(--accent-primary);
+    padding: 6px 12px;
+    border-radius: var(--radius-md);
+    text-decoration: none;
+    transition: background 0.2s;
+}
+
+.signInBtn:hover {
+    background: var(--accent-secondary);
 }

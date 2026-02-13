@@ -12,6 +12,8 @@ export const metadata: Metadata = {
     },
 };
 
+import { AuthProvider } from "@/lib/auth-context";
+
 export default function RootLayout({
     children,
 }: {
@@ -20,18 +22,20 @@ export default function RootLayout({
     return (
         <html lang="en">
             <body>
-                <Sidebar />
-                <TopBar />
-                <main
-                    style={{
-                        marginLeft: "var(--sidebar-width)",
-                        marginTop: "var(--topbar-height)",
-                        minHeight: "calc(100vh - var(--topbar-height))",
-                        padding: "var(--space-xl)",
-                    }}
-                >
-                    {children}
-                </main>
+                <AuthProvider>
+                    <Sidebar />
+                    <TopBar />
+                    <main
+                        style={{
+                            marginLeft: "var(--sidebar-width)",
+                            marginTop: "var(--topbar-height)",
+                            minHeight: "calc(100vh - var(--topbar-height))",
+                            padding: "var(--space-xl)",
+                        }}
+                    >
+                        {children}
+                    </main>
+                </AuthProvider>
             </body>
         </html>
     );

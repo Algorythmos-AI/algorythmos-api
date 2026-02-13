@@ -10,14 +10,18 @@ from .extractors.base import BaseExtractor
 from .io.pdf import load_text
 from .logging_utils import get_logger
 from .schemas import UsageRecord
-
+from .extractors.google_vision import GoogleVisionExtractor
 
 class ExtractionRouter:
     """Orchestrate provider-specific extraction."""
 
     def __init__(self, extractors: Optional[Iterable[BaseExtractor]] = None) -> None:
         self.extractors: Tuple[BaseExtractor, ...] = (
-            tuple(extractors) if extractors else (OrangeExtractor(), GenericTelcoExtractor())
+            tuple(extractors) if extractors else (
+                OrangeExtractor(), 
+                GenericTelcoExtractor(),
+                GoogleVisionExtractor(),
+            )
         )
 
     def extract_path(
