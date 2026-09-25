@@ -41,7 +41,7 @@ def upgrade() -> None:
         sa.Column("prefix", sa.String(12), nullable=False),  # "alg_" + 8 chars
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
         sa.Column("last_used_at", sa.DateTime(timezone=True), nullable=True),
-        sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.text("1")),
+        sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.true()),
     )
     
     # Create indexes for efficient queries

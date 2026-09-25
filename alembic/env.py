@@ -15,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 # Import directly from root-level database module to avoid triggering
 # the full app module load (which requires config settings like ALG_API_KEY)
-from database import DATABASE_URL, Base
+from database import DATABASE_URL, Base, normalize_database_url
 
 # Import generic document processing models to register them with Base
 from document_processing import models as doc_models
@@ -28,7 +28,10 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-config.set_main_option("sqlalchemy.url", os.getenv("DATABASE_URL", DATABASE_URL))
+# Migrations run DDL, so use the direct (non-pooled) connection when the provider
+# offers one; fall back to the runtime URL. `%` is escaped for ConfigParser.
+_migration_url = normalize_database_url(os.getenv("DATABASE_URL_UNPOOLED") or DATABASE_URL)
+config.set_main_option("sqlalchemy.url", _migration_url.replace("%", "%%"))
 
 target_metadata = Base.metadata
 
