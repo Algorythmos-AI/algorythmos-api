@@ -30,7 +30,7 @@ def upgrade() -> None:
         sa.Column("idempotency_key", sa.String(length=255), nullable=False),
         sa.Column("status_code", sa.Integer(), nullable=True),
         sa.Column("response_body", sa.JSON(), nullable=True),
-        sa.Column("in_progress", sa.Boolean(), nullable=False, server_default=sa.text("1")),
+        sa.Column("in_progress", sa.Boolean(), nullable=False, server_default=sa.true()),
         sa.Column("created_at", sa.DateTime(), nullable=False, server_default=sa.func.now()),
         sa.Column("updated_at", sa.DateTime(), nullable=False, server_default=sa.func.now()),
         sa.Column("expires_at", sa.DateTime(), nullable=False),
