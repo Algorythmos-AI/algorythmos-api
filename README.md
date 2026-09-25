@@ -4,9 +4,9 @@ Multi-tenant document-processing API (FastAPI): files, parse, processors, workfl
 
 | | |
 |---|---|
-| **Status** | Live · maintenance only (no active development). Database-backed routes fail until `DATABASE_URL` is set on Vercel |
+| **Status** | Live · maintained (fixes only, no feature work) |
 | **Owner** | [@Algorythmos-AI/maintainers](https://github.com/orgs/Algorythmos-AI/teams/maintainers) |
-| **Runs at** | <https://api-algorythmos.vercel.app/docs> (Vercel project `api-algorythmos`, deploys from `main`) |
+| **Runs at** | <https://api.algorythmos.fr/docs> and <https://api-algorythmos.vercel.app/docs> (Vercel project `api-algorythmos`, deploys from `main`). `api.algorythmos.com`, used below, has no DNS yet |
 | **Run locally** | `cp .env.example .env && python3 -m pip install -r requirements.txt && python3 -m uvicorn app:app --reload` |
 | **Context** | [Org repository map](https://github.com/Algorythmos-AI/.github-private/blob/main/profile/README.md#repository-map) · [Glossary](https://github.com/Algorythmos-AI/.github-private/blob/main/docs/glossary.md) |
 
