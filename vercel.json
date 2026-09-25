@@ -1,5 +1,6 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "installCommand": "pip install -r requirements.txt",
-  "ignoreCommand": "if [ -n \"$VERCEL_GIT_PREVIOUS_SHA\" ] && git rev-parse -q --verify \"$VERCEL_GIT_PREVIOUS_SHA^{commit}\" >/dev/null 2>&1; then git diff --quiet \"$VERCEL_GIT_PREVIOUS_SHA\" HEAD -- . \":(exclude)README.md\" \":(exclude)LICENSE\" \":(exclude).github/CODEOWNERS\" \":(exclude).github/dependabot.yml\"; else exit 1; fi"
+  "ignoreCommand": "bash scripts/vercel_ignore.sh",
+  "buildCommand": "python scripts/vercel_build.py"
 }

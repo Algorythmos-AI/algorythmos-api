@@ -1,4 +1,4 @@
-"""Vercel build step: apply database migrations on production deploys only.
+"""Vercel build step (vercel.json buildCommand): migrate on production deploys only.
 
 Runs during `vercel build`, where the Sensitive DATABASE_URL* variables are
 available (they cannot be pulled to a laptop). Preview deploys share the
