@@ -1,4 +1,16 @@
-# Algorythmos Platform
+# Algorythmos — document-processing API
+
+Multi-tenant document-processing API (FastAPI): files, parse, processors, workflows, webhooks.
+
+| | |
+|---|---|
+| **Status** | Live · maintenance only (no active development). Database-backed routes fail until `DATABASE_URL` is set on Vercel |
+| **Owner** | [@Algorythmos-AI/maintainers](https://github.com/orgs/Algorythmos-AI/teams/maintainers) |
+| **Runs at** | <https://api-algorythmos.vercel.app/docs> (Vercel project `api-algorythmos`, deploys from `main`) |
+| **Run locally** | `cp .env.example .env && python3 -m pip install -r requirements.txt && python3 -m uvicorn app:app --reload` |
+| **Context** | [Org repository map](https://github.com/Algorythmos-AI/.github-private/blob/main/profile/README.md#repository-map) · [Glossary](https://github.com/Algorythmos-AI/.github-private/blob/main/docs/glossary.md) |
+
+---
 
 Algorythmos is a split-stack document intelligence platform:
 - Backend API (FastAPI) from repository root.
