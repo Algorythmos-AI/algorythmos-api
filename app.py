@@ -973,13 +973,30 @@ def build_api() -> FastAPI:
         get_session = db_module.get_session
         Base = db_module.Base
 
-        # app/models.py can't be imported as `app.models` on Vercel because
-        # app.py (file) shadows app/ (package). Load by file path instead.
-        from importlib import util as _importlib_util
-        _models_path = Path(__file__).resolve().parent / "app" / "models.py"
-        _spec = _importlib_util.spec_from_file_location("_app_models", str(_models_path))
-        _models_module = _importlib_util.module_from_spec(_spec)
-        _spec.loader.exec_module(_models_module)  # type: ignore[union-attr]
+        # Load app/models.py exactly once per process, otherwise ``Run`` is
+        # registered twice on the shared metadata ("Table 'runs' is already
+        # defined"). When ``app`` is the package, use the normal import.
+        # When app.py (file) shadows app/ (package), load by file path instead.
+        # A file-loaded module must be registered in sys.modules before exec:
+        # SQLAlchemy resolves the stringified ``Mapped[...]`` annotations (from
+        # ``from __future__ import annotations``) via sys.modules[cls.__module__].
+        import sys as _sys
+        _app_pkg = _sys.modules.get("app")
+        _models_module = _sys.modules.get("app.models") or _sys.modules.get("_app_models")
+        if _models_module is None and _app_pkg is not None and hasattr(_app_pkg, "__path__"):
+            from importlib import import_module as _import_module
+            _models_module = _import_module("app.models")
+        if _models_module is None:
+            from importlib import util as _importlib_util
+            _models_path = Path(__file__).resolve().parent / "app" / "models.py"
+            _spec = _importlib_util.spec_from_file_location("_app_models", str(_models_path))
+            _models_module = _importlib_util.module_from_spec(_spec)
+            _sys.modules["_app_models"] = _models_module
+            try:
+                _spec.loader.exec_module(_models_module)  # type: ignore[union-attr]
+            except BaseException:
+                _sys.modules.pop("_app_models", None)
+                raise
         Run = _models_module.Run
     except Exception as e:
         # Database modules not available - tests may provide mocks
