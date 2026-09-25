@@ -12,6 +12,8 @@ Multi-tenant document-processing API (FastAPI): files, parse, processors, workfl
 
 ---
 
+> **Layout today (25 Sep 2026).** The user-facing app at `app.algorythmos.com` is served by [`algorythmos-ui`](https://github.com/Algorythmos-AI/algorythmos-ui) (Vercel project `ui-algorythmos`), not by `/frontend` here, and the live API host is `api.algorythmos.fr`. The domain and `/frontend` sections below describe the original single-repo plan; `api.algorythmos.com` has no DNS yet.
+
 Algorythmos is a split-stack document intelligence platform:
 - Backend API (FastAPI) from repository root.
 - Frontend app (Next.js) from `/frontend`.
