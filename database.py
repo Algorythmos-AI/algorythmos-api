@@ -46,7 +46,15 @@ def normalize_database_url(raw: str) -> str:
 
 DATABASE_URL = normalize_database_url(os.getenv("DATABASE_URL", "sqlite+aiosqlite:///./dev.db"))
 
-engine = create_async_engine(DATABASE_URL, echo=False, future=True)
+_engine_kwargs: dict = {"echo": False, "future": True}
+if DATABASE_URL.startswith("postgresql+asyncpg://"):
+    # Serverless instances sit idle between requests, and Neon closes idle
+    # connections (compute auto-suspend, pooler timeouts). Ping each pooled
+    # connection on checkout and recycle old ones so a closed connection is
+    # replaced instead of surfacing as "connection is closed" (HTTP 500).
+    _engine_kwargs.update(pool_pre_ping=True, pool_recycle=300)
+
+engine = create_async_engine(DATABASE_URL, **_engine_kwargs)
 async_session_factory = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
 
 
