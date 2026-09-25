@@ -72,7 +72,7 @@ ENV/
 env.bak/
 venv.bak/
 .virtualenv
-.python-version
+# .python-version is committed on purpose: it pins the Vercel Python runtime
 __pypackages__/
 .uv/
 
