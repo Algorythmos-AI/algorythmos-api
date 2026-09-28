@@ -15,7 +15,7 @@ jobs:
   security:
     uses: Algorythmos-AI/.github/.github/workflows/security.yml@1078ed679bed88c7a41744cda79aa505eb4ff277
     with:
-      semgrep: false
+      semgrep: true # frontend/ is Next.js/TypeScript
 
   dependencies:
     name: Dependency audit
