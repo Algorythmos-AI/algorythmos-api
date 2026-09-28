@@ -2,5 +2,14 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "installCommand": "pip install -r requirements.txt",
   "ignoreCommand": "bash scripts/vercel_ignore.sh",
-  "buildCommand": "python scripts/vercel_build.py"
+  "buildCommand": "python scripts/vercel_build.py",
+  "regions": [
+    "iad1"
+  ],
+  "crons": [
+    {
+      "path": "/api/internal/cron/retention",
+      "schedule": "0 3 * * *"
+    }
+  ]
 }

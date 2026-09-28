@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Security
+- **Data retention.** Documents and derived data are removed 30 days after creation,
+  soft-deleted rows 7 days after deletion, expired idempotency and replay rows once
+  expired (`docs/DATA-RETENTION.md`). A daily Vercel Cron calls
+  `GET /api/internal/cron/retention`, which requires `CRON_SECRET`, runs only on the
+  production deployment, takes a Postgres advisory lock, and defaults to
+  `RETENTION_MODE=report` (counts only, deletes nothing).
+- Production requires `CRON_SECRET`.
+- Functions pinned to `iad1`, the database's region; EU move documented in
+  `docs/runbooks/eu-region-migration.md`.
 - **Tenant binding.** The tenant now comes from the credential, not the caller:
   the service key acts for `ALG_TENANT_ID` (plus the deprecated
   `ALG_STATIC_KEY_ALLOWED_TENANTS`), a personal `alg_` key for its tenant, a Google

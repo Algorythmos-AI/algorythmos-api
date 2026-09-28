@@ -106,7 +106,8 @@ from document_processing.services import evaluation_service
 from core.config import build_error_response, build_pagination_meta
 from core.principals import API_KEY_PREFIX, user_and_tenant_from_api_key, user_from_google_token
 from core.principals import hash_api_key as core_hash_api_key
-from core.security import UnsafeOutboundURL, assert_public_https_url, bearer_token, matching_static_credential
+from core.security import UnsafeOutboundURL, assert_public_https_url, bearer_token, matching_static_credential, secure_equals
+from document_processing.services.retention_service import RetentionPolicy, run_retention
 from core.tenancy import TenantMismatch, TenantUnresolved, bound_tenant, static_key_tenant, static_key_tenant_or_none
 
 # Database imports - use direct module references to avoid package conflicts
@@ -1480,6 +1481,43 @@ def build_api() -> FastAPI:
                 detail={"code": "UNAUTHORIZED", "message": "Invalid or missing authentication"},
             )
         return await metrics_app()()
+
+    # Scheduled data retention (Vercel Cron: GET with Authorization: Bearer <CRON_SECRET>)
+    @app.get("/internal/cron/retention", include_in_schema=False)
+    async def retention_cron(request: Request, session=Depends(_db_session)):
+        """Count (RETENTION_MODE=report) or delete (enforce) data past the retention policy."""
+        secret = (settings.CRON_SECRET or "").strip()
+        presented = bearer_token(request.headers.get("authorization"))
+        if not secret or not presented or not secure_equals(presented, secret):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={"code": "UNAUTHORIZED", "message": "Invalid or missing cron credentials"},
+            )
+        # Preview deployments share the production database: never purge from them.
+        if os.getenv("VERCEL_ENV") != "production" and not settings.RETENTION_ALLOW_NON_PROD:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={"code": "RETENTION_PRODUCTION_ONLY", "message": "Retention runs on the production deployment only"},
+            )
+
+        policy = RetentionPolicy(
+            retention_days=settings.RETENTION_DAYS,
+            soft_delete_days=settings.SOFT_DELETE_PURGE_DAYS,
+        )
+        enforce = settings.RETENTION_MODE.strip().lower() == "enforce"
+        result = await run_retention(session, policy, enforce=enforce)
+        logger.info(
+            "Retention run",
+            extra={"context": {"mode": result.mode, "skipped": result.skipped, "total": result.total, "counts": result.counts}},
+        )
+        return {
+            "mode": result.mode,
+            "skipped": result.skipped,
+            "total": result.total,
+            "counts": result.counts,
+            "retention_days": policy.retention_days,
+            "soft_delete_days": policy.soft_delete_days,
+        }
 
     # ==================== AUTHENTICATION ENDPOINTS ====================
 

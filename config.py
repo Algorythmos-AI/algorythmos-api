@@ -128,6 +128,15 @@ class Settings(BaseSettings):
     # everyone else gets a tenant of their own.
     GOOGLE_TENANT_MAP: str = Field(default="", description="Email domain to tenant mapping for Google users")
 
+    # Data retention (document_processing/services/retention_service.py).
+    RETENTION_DAYS: int = Field(default=30, description="Days before documents and derived data are removed")
+    SOFT_DELETE_PURGE_DAYS: int = Field(default=7, description="Days before soft-deleted rows are removed")
+    RETENTION_MODE: str = Field(default="report", description="report (count only) or enforce (delete)")
+    RETENTION_ALLOW_NON_PROD: bool = Field(
+        default=False, description="Allow the retention endpoint outside the Vercel production environment (tests only)"
+    )
+    CRON_SECRET: str | None = Field(default=None, description="Bearer secret Vercel Cron sends to scheduled endpoints")
+
     # Idempotency settings
     IDEMPOTENCY_TTL_S: int = Field(
         default=86400,  # 24 hours
@@ -221,6 +230,12 @@ class Settings(BaseSettings):
             # Legacy vendor signatures stay off in production unless explicitly enabled.
             if "WEBHOOK_ALLOW_LEGACY_SIGNATURES" not in self.model_fields_set:
                 self.WEBHOOK_ALLOW_LEGACY_SIGNATURES = False
+        if self.RETENTION_MODE.strip().lower() not in {"report", "enforce"}:
+            raise ValueError("RETENTION_MODE must be 'report' or 'enforce'")
+        if self.RETENTION_DAYS < 1 or self.SOFT_DELETE_PURGE_DAYS < 1:
+            raise ValueError("RETENTION_DAYS and SOFT_DELETE_PURGE_DAYS must be at least 1")
+        if env_normalized in {"prod", "production"} and not (self.CRON_SECRET or "").strip():
+            raise ValueError("CRON_SECRET is required in production: it authenticates scheduled jobs")
         if self.PARSE_WORKER_MAX_ATTEMPTS < 1:
             raise ValueError("PARSE_WORKER_MAX_ATTEMPTS must be >= 1")
         if self.PARSE_WORKER_POLL_INTERVAL_S <= 0:
