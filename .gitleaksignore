@@ -1,0 +1,4 @@
+# Reviewed false positives only. Each entry needs a reason (org standard).
+# Idempotency-Key example values: request-deduplication identifiers, not credentials.
+API_REFERENCE.md:generic-api-key:580
+tests/test_phase6_production.py:generic-api-key:143

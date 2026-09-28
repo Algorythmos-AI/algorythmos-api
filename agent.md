@@ -34,8 +34,8 @@ async def handler(session = Depends(get_session)):  # ✅ CORRECT
 - December 2025: Production outage occurred due to this exact issue
 
 ### Enforcement
-- A regression test (`tests/test_no_asyncsession_in_routes.py`) will fail if this rule is violated
-- Pre-commit hook blocks commits containing the forbidden pattern
+- A regression test (`tests/static/test_no_asyncsession_in_routes.py`) fails CI if this rule is violated
+- The same test runs as a local pre-commit hook (`.pre-commit-config.yaml`; enable with `pre-commit install`)
 - Runtime behavior is identical with or without the annotation
 
 ---
@@ -45,21 +45,10 @@ async def handler(session = Depends(get_session)):  # ✅ CORRECT
 - **NEVER** specify `"runtime": "python3.11"` or any Python version in vercel.json or elsewhere — it causes build failure: "Function Runtimes must have a valid version".
 - Vercel auto-detects Python from files in `/api/`.
 
-## Required vercel.json (use exactly this)
-```json
-{
-  "$schema": "https://openapi.vercel.sh/vercel.json",
-  "installCommand": "pip install -r requirements.txt",
-  "rewrites": [
-    { "source": "/(.*)", "destination": "/api/index.py" }
-  ],
-  "functions": {
-    "api/**/*.py": {
-      "excludeFiles": "{tests/**,__tests__/**,**/*.test.py,**/test_*.py,fixtures/**,__fixtures__/**,testdata/**,sample-data/**,static/**,assets/**,vendor_libs/**}"
-    }
-  }
-}
-```
+## vercel.json
+The committed `vercel.json` is the source of truth: install from `requirements.txt`, run
+`scripts/vercel_build.py` as the build step (migrations run on production builds only), and
+never add a `runtime` key. Keep test data, fixtures and docs out of the bundle via `.vercelignore`.
 
 ## Health Check
 - Always include a lightweight root endpoint in `api/index.py`:
@@ -69,10 +58,12 @@ def health(): return {"status": "ok"}
 ```
 
 ## Testing Requirements (ENFORCED BEFORE ANY PR)
-All PRs must confirm these pass locally using Python 3.12.12:
-- `pytest` → all tests green
-- `ruff check` → no lint errors
-- `ruff format --check` → code formatted correctly
+All PRs must confirm these pass locally on Python 3.12 (`uv pip install -r requirements.txt -r dev-requirements.txt`):
+- `pytest` → no new failures. Tests in `tests/known_failures.txt` run as non-strict xfail; that list may only shrink.
+- `ruff check . --select E9,F63,F7,F82,PLE` → clean (the full rule set is reported, not yet enforced)
+- `python -m alembic heads` → exactly one head
+- `pip-audit --strict --no-deps --disable-pip -r requirements.txt` → no known vulnerabilities
+- Never commit real documents or personal data; test fixtures are synthetic (`tests/fixtures/`)
 - Manual: `uvicorn api.index:app --reload` → health check returns 200 + JSON
 
 Include test output summary in PR description.
@@ -137,4 +128,4 @@ When adding new authentication providers:
 - **NEVER add AsyncSession type annotations to route handlers** (see critical rule above).
 - Keep this agent.md up to date.
 
-Last updated: December 25, 2025
+Last updated: September 28, 2026

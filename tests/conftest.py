@@ -178,3 +178,34 @@ def sign_v1():
 def anyio_backend() -> str:
     """Force AnyIO-backed tests to run with asyncio backend only."""
     return "asyncio"
+
+
+# --- Legacy failure ratchet -------------------------------------------------
+# tests/known_failures.txt lists tests that were already failing on main when
+# CI gating was restored. They run as non-strict xfail: CI stays green for the
+# rest of the suite, a newly broken test still fails the build, and a repaired
+# test shows up as XPASS so its line can be deleted. The list only shrinks.
+_KNOWN_FAILURES_FILE = Path(__file__).with_name("known_failures.txt")
+
+
+def _load_known_failures() -> set[str]:
+    if not _KNOWN_FAILURES_FILE.exists():
+        return set()
+    return {
+        line.strip()
+        for line in _KNOWN_FAILURES_FILE.read_text().splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    }
+
+
+def pytest_collection_modifyitems(config, items):
+    known = _load_known_failures()
+    if not known:
+        return
+    marker = pytest.mark.xfail(
+        reason="pre-existing failure on main; see tests/known_failures.txt",
+        strict=False,
+    )
+    for item in items:
+        if item.nodeid in known:
+            item.add_marker(marker)

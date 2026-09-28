@@ -27,7 +27,7 @@ All endpoints (except health checks) require authentication via API key.
 ### Example
 
 ```bash
-curl -H "X-Api-Key: your-api-key" \
+curl -H "X-Api-Key: $ALG_API_KEY" \
      -H "X-Tenant-Id: tenant-123" \
      https://api.algorythmos.com/api/alg/healthz
 ```

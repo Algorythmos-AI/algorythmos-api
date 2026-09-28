@@ -1,35 +1,28 @@
 from __future__ import annotations
 
 import os
-import shutil
 import time
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
+from fixtures.synthetic_invoices import SYNTHETIC_INVOICES, write_synthetic_invoices
+
 os.environ.setdefault("API_KEY", "local_dummy")
 
 from service import app
 
 client = TestClient(app)
-HEADERS = {"X-Tenant-Id": "tenant-test", "X-Api-Key": os.environ["API_KEY"]}
-SOURCE_FIXTURE_DIR = Path(__file__).resolve().parent.parent / "files"
-EXPECTED_FILES = [
-    "facture_9099017876_2025-05-06-2.pdf",
-    "facture_9099017876_2025-06-06.pdf",
-    "facture_9099017876_2025-07-07.pdf",
-    "facture_9099017876_2025-08-06-2.pdf",
-    "facture_9099017876_2025-09-08.pdf",
-]
+API_KEY = os.environ.get("ALG_API_KEY") or os.environ["API_KEY"]
+HEADERS = {"X-Tenant-Id": "tenant-test", "X-Api-Key": API_KEY}
 
 
 @pytest.fixture(scope="module")
 def fixture_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    """Create deterministic fixture directory with only the expected 5 PDFs."""
+    """Generate the five synthetic invoices into a fresh directory."""
     dest = tmp_path_factory.mktemp("service-smoke-files")
-    for filename in EXPECTED_FILES:
-        shutil.copy2(SOURCE_FIXTURE_DIR / filename, dest / filename)
+    write_synthetic_invoices(dest)
     return dest
 
 
@@ -45,11 +38,14 @@ def test_extract_path_smoke(fixture_dir: Path) -> None:
     assert payload["count"] == 5
 
     expected = [
-        ("facture_9099017876_2025-05-06-2.pdf", "2025-05-06", "2025-05-02", "2025-06-01", 6.221),
-        ("facture_9099017876_2025-06-06.pdf", "2025-06-06", "2025-05-02", "2025-06-01", 41.4),
-        ("facture_9099017876_2025-07-07.pdf", "2025-07-07", "2025-07-02", "2025-08-01", 81.6),
-        ("facture_9099017876_2025-08-06-2.pdf", "2025-08-06", "2025-08-02", "2025-09-01", 88.2),
-        ("facture_9099017876_2025-09-08.pdf", "2025-09-08", "2025-09-02", "2025-10-01", 99.0),
+        (
+            inv.filename,
+            inv.invoice_date.isoformat(),
+            inv.period_start.isoformat(),
+            inv.period_end.isoformat(),
+            inv.internet_gb,
+        )
+        for inv in SYNTHETIC_INVOICES
     ]
 
     records = payload["records"]
@@ -69,7 +65,7 @@ def test_extract_path_smoke(fixture_dir: Path) -> None:
 def test_extract_path_requires_tenant_header() -> None:
     response = client.post(
         "/extract/path",
-        json={"input_path": str(SOURCE_FIXTURE_DIR)},
+        json={"input_path": "/nonexistent"},
     )
     assert response.status_code in (400, 401)
 

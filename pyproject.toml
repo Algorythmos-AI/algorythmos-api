@@ -7,7 +7,7 @@ name = "pdf-usage-extractor"
 version = "0.1.0"
 description = "FastAPI service for extracting internet usage data from telco PDFs"
 readme = "README.md"
-requires-python = ">=3.11,<3.12"
+requires-python = ">=3.12,<3.13"
 authors = [
     { name = "Sam Kalaliya" },
 ]
@@ -80,7 +80,7 @@ markers = [
 
 [tool.black]
 line-length = 120
-target-version = ['py311']
+target-version = ['py312']
 include = '\.pyi?$'
 extend-exclude = '''
 /(
@@ -106,8 +106,10 @@ use_parentheses = true
 ensure_newline_before_comments = true
 
 [tool.ruff]
-target-version = "py311"
+target-version = "py312"
 line-length = 120
+
+[tool.ruff.lint]
 select = [
     "E",  # pycodestyle errors
     "W",  # pycodestyle warnings
@@ -123,7 +125,7 @@ ignore = [
     "C901",  # too complex
 ]
 
-[tool.ruff.per-file-ignores]
+[tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]
 "tests/**/*" = ["B011"]
 
