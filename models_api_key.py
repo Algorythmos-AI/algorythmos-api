@@ -39,6 +39,8 @@ class ApiKeyDB(Base):
     name = Column(String(100), nullable=False)
     key_hash = Column(String(64), nullable=False, unique=True, index=True)  # SHA-256 = 64 hex chars
     prefix = Column(String(12), nullable=False)  # "alg_" + first 8 chars
+    # Tenant this key acts for, copied from its user when the key is created.
+    tenant_id = Column(String(255), nullable=True, index=True)
     
     # Timestamps
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())

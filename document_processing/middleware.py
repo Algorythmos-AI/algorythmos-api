@@ -18,6 +18,8 @@ from core.security import credential_fingerprint
 
 # Returns the presented credential when the request authenticates, else None.
 Authenticator = Callable[[Request], Optional[str]]
+# Returns the tenant an authenticated request is bound to, else None (the route will refuse it).
+TenantResolver = Callable[[Request], Optional[str]]
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
@@ -32,8 +34,10 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         requests_per_hour: int = 1000,
         fail_closed: bool = False,
         authenticate: Optional[Authenticator] = None,
+        resolve_tenant: Optional[TenantResolver] = None,
     ):
         super().__init__(app)
+        self.resolve_tenant = resolve_tenant
         self.rate_limit_store = rate_limit_store
         self.requests_per_minute = requests_per_minute
         self.requests_per_hour = requests_per_hour
@@ -139,6 +143,8 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         return response
 
     def _get_tenant_id(self, request: Request) -> Optional[str]:
+        if self.resolve_tenant is not None:
+            return self.resolve_tenant(request)
         if hasattr(request.state, "tenant_id"):
             return request.state.tenant_id
         return request.headers.get("X-Tenant-Id") or request.headers.get("X-Tenant-ID")
@@ -155,8 +161,10 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
         ttl_seconds: int = 86400,
         fail_closed: bool = False,
         authenticate: Optional[Authenticator] = None,
+        resolve_tenant: Optional[TenantResolver] = None,
     ):
         super().__init__(app)
+        self.resolve_tenant = resolve_tenant
         self.idempotency_store = idempotency_store
         self.ttl_seconds = ttl_seconds
         self.fail_closed = fail_closed
@@ -181,6 +189,8 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
             principal = credential_fingerprint(credential)
 
         tenant_id = self._get_tenant_id(request)
+        if self.resolve_tenant is not None and tenant_id is None:
+            return await call_next(request)
         cache_key = build_idempotency_cache_key(
             tenant_id,
             idempotency_key,
@@ -261,6 +271,8 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
         return Response(content=body, status_code=response.status_code, headers=dict(response.headers))
 
     def _get_tenant_id(self, request: Request) -> Optional[str]:
+        if self.resolve_tenant is not None:
+            return self.resolve_tenant(request)
         if hasattr(request.state, "tenant_id"):
             return request.state.tenant_id
         return request.headers.get("X-Tenant-Id") or request.headers.get("X-Tenant-ID")

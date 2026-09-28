@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Security
+- **Tenant binding.** The tenant now comes from the credential, not the caller:
+  the service key acts for `ALG_TENANT_ID` (plus the deprecated
+  `ALG_STATIC_KEY_ALLOWED_TENANTS`), a personal `alg_` key for its tenant, a Google
+  user for their own tenant (`GOOGLE_TENANT_MAP`, else per user; users of a public
+  mail domain never share one). `X-Tenant-Id` is optional and must match
+  (`403 TENANT_MISMATCH`). Rate limits and idempotency use the bound tenant.
+- Personal `alg_` keys and Google ID tokens are accepted on data routes.
+- Production requires `ALG_TENANT_ID` and refuses a `*` tenant allow-list.
+- Migration `20260928_tenant_binding` (expand-only): nullable `tenant_id` on
+  `users` and `api_keys`, assigned on first use. See `docs/runbooks/tenant-binding.md`.
 - API keys are compared in constant time; a non-matching Bearer token falls through to
   `X-API-Key` instead of shadowing it.
 - Idempotent responses are only replayed to an authenticated caller, and the cache key
