@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Security
+- **Production build guard.** A production build fails unless `ENV=prod` and the
+  settings pass the production validator, so a misconfigured deploy is never
+  promoted and the previous one keeps serving. Settings validation errors no longer
+  echo their input, which contained every secret. See
+  `docs/runbooks/production-mode.md`.
 - **Data retention.** Documents and derived data are removed 30 days after creation,
   soft-deleted rows 7 days after deletion, expired idempotency and replay rows once
   expired (`docs/DATA-RETENTION.md`). A daily Vercel Cron calls

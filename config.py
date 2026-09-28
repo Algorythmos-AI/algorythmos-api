@@ -190,7 +190,9 @@ class Settings(BaseSettings):
     s3_secret_access_key: str = Field(default="", description="S3 secret access key")
     s3_bucket: str = Field(default="", description="S3 bucket name")
     
-    model_config = SettingsConfigDict(extra="ignore")
+    # hide_input_in_errors: a validation error must not echo the settings input,
+    # which includes every secret, into build or runtime logs.
+    model_config = SettingsConfigDict(extra="ignore", hide_input_in_errors=True)
     
     @model_validator(mode='after')
     def validate_production_requirements(self) -> 'Settings':
