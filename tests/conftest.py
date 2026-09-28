@@ -21,6 +21,13 @@ os.environ.setdefault("ALG_API_KEY", "local_dummy")
 os.environ.setdefault("VENDOR_WEBHOOK_SECRET", "stage7-secret")
 os.environ.setdefault("GOOGLE_CLIENT_ID", "test-client-id.apps.googleusercontent.com")
 os.environ.setdefault("NO_NETWORK", "1")
+# Server-side path extraction is confined to this directory in tests (pytest's
+# tmp dirs live under it); unset in deployed environments, so the feature is off.
+import tempfile  # noqa: E402
+
+# Tests exercise CORS from a local dev origin; production refuses local origins.
+os.environ.setdefault("CORS_ORIGINS", "http://localhost:3000")
+os.environ.setdefault("LOCAL_EXTRACT_BASE_DIR", str(Path(tempfile.gettempdir()).resolve()))
 
 app_package = importlib.import_module("app")
 app_module = getattr(app_package, "_app_entry", None)

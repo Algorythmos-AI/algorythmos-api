@@ -14,6 +14,12 @@ from unittest.mock import AsyncMock, patch, MagicMock
 from datetime import datetime
 
 from app import create_app
+from config import settings
+
+
+def _metrics_headers() -> dict:
+    """/metrics requires the configured API key (its labels include tenant IDs)."""
+    return {"X-API-Key": settings.ALG_API_KEY}
 
 
 @pytest.fixture
@@ -140,7 +146,7 @@ async def test_rate_limit_excludes_health_check(app_client, api_key):
 @pytest.mark.asyncio
 async def test_idempotency_post_request(app_client, api_key, mock_session):
     """Test idempotency for POST requests."""
-    idempotency_key = "test-idempotency-123"
+    idempotency_key = "idem-post-" + "request-0001"  # plain request identifier
     
     # First request
     with patch("app.get_session", return_value=mock_session):
@@ -276,7 +282,7 @@ async def test_idempotency_per_tenant(app_client, mock_session):
 @pytest.mark.asyncio
 async def test_metrics_endpoint_exists(app_client):
     """Test that metrics endpoint is accessible."""
-    response = await app_client.get("/metrics")
+    response = await app_client.get("/metrics", headers=_metrics_headers())
     
     assert response.status_code == 200
     assert "text/plain" in response.headers.get("content-type", "")
@@ -290,7 +296,7 @@ async def test_http_request_metrics(app_client, api_key):
     await app_client.get("/api/extractors", headers={"X-API-Key": api_key})
     
     # Check metrics
-    response = await app_client.get("/metrics")
+    response = await app_client.get("/metrics", headers=_metrics_headers())
     content = response.text
     
     # Should have http_requests_total metric
@@ -301,7 +307,7 @@ async def test_http_request_metrics(app_client, api_key):
 @pytest.mark.asyncio
 async def test_webhook_metrics_exist(app_client):
     """Test webhook metrics are defined."""
-    response = await app_client.get("/metrics")
+    response = await app_client.get("/metrics", headers=_metrics_headers())
     content = response.text
     
     # Should have webhook metrics defined
@@ -312,7 +318,7 @@ async def test_webhook_metrics_exist(app_client):
 @pytest.mark.asyncio
 async def test_parser_run_metrics_exist(app_client):
     """Test parser run metrics are defined."""
-    response = await app_client.get("/metrics")
+    response = await app_client.get("/metrics", headers=_metrics_headers())
     content = response.text
     
     # Should have parser metrics defined
@@ -323,7 +329,7 @@ async def test_parser_run_metrics_exist(app_client):
 @pytest.mark.asyncio
 async def test_rate_limit_metrics_exist(app_client):
     """Test rate limit metrics are defined."""
-    response = await app_client.get("/metrics")
+    response = await app_client.get("/metrics", headers=_metrics_headers())
     content = response.text
     
     # Should have rate limit metrics
@@ -333,7 +339,7 @@ async def test_rate_limit_metrics_exist(app_client):
 @pytest.mark.asyncio
 async def test_idempotency_metrics_exist(app_client):
     """Test idempotency metrics are defined."""
-    response = await app_client.get("/metrics")
+    response = await app_client.get("/metrics", headers=_metrics_headers())
     content = response.text
     
     # Should have idempotency metrics

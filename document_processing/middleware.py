@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import Optional
+from typing import Callable, Optional
 
 from fastapi import Request, Response, status
 from fastapi.responses import JSONResponse
@@ -14,6 +14,10 @@ from document_processing.state import (
     RateLimitStore,
     build_idempotency_cache_key,
 )
+from core.security import credential_fingerprint
+
+# Returns the presented credential when the request authenticates, else None.
+Authenticator = Callable[[Request], Optional[str]]
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
@@ -27,20 +31,32 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         requests_per_minute: int = 60,
         requests_per_hour: int = 1000,
         fail_closed: bool = False,
+        authenticate: Optional[Authenticator] = None,
     ):
         super().__init__(app)
         self.rate_limit_store = rate_limit_store
         self.requests_per_minute = requests_per_minute
         self.requests_per_hour = requests_per_hour
         self.fail_closed = fail_closed
+        self.authenticate = authenticate
 
     async def dispatch(self, request: Request, call_next):
         if request.url.path in ["/health", "/metrics", "/api/health", "/alg/healthz"]:
             return await call_next(request)
 
+        # Only authenticated requests count against a tenant's quota. Counting
+        # before authentication let anyone exhaust any tenant's limit by sending
+        # its name; unauthenticated requests are rejected by the route instead.
+        if self.authenticate is not None and self.authenticate(request) is None:
+            return await call_next(request)
+
         tenant_id = self._get_tenant_id(request)
         if not tenant_id:
             return await call_next(request)
+
+        # The route dependency skips its own check when this flag is set, so a
+        # request is counted exactly once.
+        request.state.rate_limit_counted = True
 
         minute_remaining = self.requests_per_minute
         hour_remaining = self.requests_per_hour
@@ -138,11 +154,13 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
         idempotency_store: IdempotencyStore,
         ttl_seconds: int = 86400,
         fail_closed: bool = False,
+        authenticate: Optional[Authenticator] = None,
     ):
         super().__init__(app)
         self.idempotency_store = idempotency_store
         self.ttl_seconds = ttl_seconds
         self.fail_closed = fail_closed
+        self.authenticate = authenticate
 
     async def dispatch(self, request: Request, call_next):
         if request.method not in ["POST", "PUT", "PATCH"]:
@@ -152,12 +170,23 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
         if not idempotency_key:
             return await call_next(request)
 
+        # Never replay or reserve anything for an unauthenticated caller: the
+        # cached response is served before the route runs, so authentication
+        # must happen here. The route then rejects the request as usual.
+        principal: Optional[str] = None
+        if self.authenticate is not None:
+            credential = self.authenticate(request)
+            if credential is None:
+                return await call_next(request)
+            principal = credential_fingerprint(credential)
+
         tenant_id = self._get_tenant_id(request)
         cache_key = build_idempotency_cache_key(
             tenant_id,
             idempotency_key,
             request.method,
             request.url.path,
+            principal=principal,
         )
 
         try:

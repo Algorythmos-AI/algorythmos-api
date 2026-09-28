@@ -8,6 +8,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Security
+- API keys are compared in constant time; a non-matching Bearer token falls through to
+  `X-API-Key` instead of shadowing it.
+- Idempotent responses are only replayed to an authenticated caller, and the cache key
+  includes a fingerprint of the credential. Previously a cached response could be read
+  without a key.
+- Rate limits count authenticated requests only, exactly once per request, at
+  `RATE_PER_MIN`. Previously unauthenticated requests counted against a tenant's quota
+  and each request was counted twice.
+- `/extract/path` and `/jobs` `input_path` are confined to `LOCAL_EXTRACT_BASE_DIR`
+  and disabled in production and wherever that setting is unset.
+- `/jobs` `webhook_url` must be https and resolve to a public address; checked again
+  before sending, redirects not followed.
+- `/metrics` requires the API key.
+- `/openapi.json` declares the `ApiKeyAuth` and `BearerAuth` security schemes and no
+  longer returns internal error text.
+- CORS: no default origins, an explicit header list, no credentialed requests.
+- Production refuses to start with `*` or local CORS origins, the default
+  `WEBHOOK_SECRET`, or `LOCAL_EXTRACT_BASE_DIR`; legacy vendor signatures default off.
+- Google sign-in honours `GOOGLE_ALLOWED_DOMAINS` / `GOOGLE_ALLOWED_EMAILS`; with
+  neither set it is closed in production.
+- `REDIS_URL` also reads `KV_URL` / `UPSTASH_REDIS_URL` from managed integrations.
 - Removed committed personal documents and a derived usage export from the tree and the
   deploy bundle; test fixtures are now synthetic invoices generated at test time.
 - Removed scripts that embedded an API key; tests fall back to a dummy key only.

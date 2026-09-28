@@ -73,7 +73,7 @@ Get service version information (public).
 
 ### GET /metrics
 
-Prometheus metrics endpoint for monitoring (public).
+Prometheus metrics endpoint for monitoring. Requires the API key (`X-API-Key` or `Authorization: Bearer`), because metric labels include tenant IDs; returns `401` without it.
 
 **Response:** `200 OK` (text/plain)
 
@@ -118,7 +118,7 @@ Create a new processor run (recommended API).
 curl -X POST https://api.algorythmos.com/api/processors/demo/runs \
   -H "X-Api-Key: your-key" \
   -H "X-Tenant-Id: tenant-123" \
-  -H "Idempotency-Key: order-456-retry-1" \
+  -H "Idempotency-Key: $(uuidgen)" \
   -F "files=@invoice1.pdf" \
   -F "files=@invoice2.pdf"
 ```
@@ -130,7 +130,7 @@ curl -X POST https://api.algorythmos.com/api/processors/demo/runs \
   -H "X-Api-Key: your-key" \
   -H "X-Tenant-Id: tenant-123" \
   -H "Content-Type: application/json" \
-  -H "Idempotency-Key: order-456-retry-1" \
+  -H "Idempotency-Key: $(uuidgen)" \
   -d '{
     "input_path": "s3://bucket/invoices/order-456/",
     "provider_hint": "orange_france"
@@ -377,7 +377,12 @@ curl -X POST https://api.algorythmos.com/api/extract/upload \
 
 ### POST /extract/path
 
-Extract from pre-uploaded files.
+Extract from files already on the server. This is a development feature: it is
+disabled (`403 LOCAL_PATHS_DISABLED`) unless `LOCAL_EXTRACT_BASE_DIR` is set, is
+always disabled in production, and paths outside that directory return
+`403 PATH_NOT_ALLOWED`. The same rule applies to `input_path` on `POST /jobs`.
+A `webhook_url` on `POST /jobs` must be `https` and resolve to a public address
+(`422 WEBHOOK_URL_REJECTED` otherwise). Use file uploads in deployed environments.
 
 **Request:**
 
@@ -577,7 +582,7 @@ Include an `Idempotency-Key` header to make requests idempotent:
 curl -X POST https://api.algorythmos.com/api/processors/demo/runs \
   -H "X-Api-Key: your-key" \
   -H "X-Tenant-Id: tenant-123" \
-  -H "Idempotency-Key: order-456-attempt-1" \
+  -H "Idempotency-Key: $(uuidgen)" \
   -F "files=@invoice.pdf"
 ```
 

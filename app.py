@@ -17,6 +17,8 @@ import httpx
 import secrets
 from fastapi import BackgroundTasks, Depends, FastAPI, File, Header, HTTPException, Request, Response, UploadFile, status, Path as PathParam, Query, Body
 from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.security import APIKeyHeader, HTTPAuthorizationCredentials, HTTPBearer
+from fastapi import Security
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.params import Body, Query
 from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field
@@ -102,6 +104,7 @@ from document_processing.services import processor_service
 from document_processing.services import workflow_service
 from document_processing.services import evaluation_service
 from core.config import build_error_response, build_pagination_meta
+from core.security import UnsafeOutboundURL, assert_public_https_url, matching_static_credential
 
 # Database imports - use direct module references to avoid package conflicts
 from sqlalchemy import select, and_, func
@@ -469,10 +472,21 @@ async def _validate_startup_state_configuration(app: FastAPI) -> None:
         await rate_limit_store.ping()
 
 
+# Declared as security schemes so /openapi.json documents how to authenticate.
+# Either one is accepted; the value itself is checked by matching_static_credential.
+_api_key_scheme = APIKeyHeader(name="X-API-Key", auto_error=False, scheme_name="ApiKeyAuth")
+_bearer_scheme = HTTPBearer(auto_error=False, scheme_name="BearerAuth")
+
+
+def _authenticated_static_credential(request: Request) -> Optional[str]:
+    """Credential check shared by the route dependency and the middleware."""
+    return matching_static_credential(request, settings.ALG_API_KEY)
+
+
 async def require_key(
     request: Request,
-    x_api_key: Optional[str] = Header(default=None, alias="x-api-key"),
-    authorization: Optional[str] = Header(default=None),
+    x_api_key: Optional[str] = Security(_api_key_scheme),
+    bearer: Optional[HTTPAuthorizationCredentials] = Security(_bearer_scheme),
     x_tenant_id: Optional[str] = Header(default=None, alias="x-tenant-id"),
     x_extend_api_version: Optional[str] = Header(default=None, alias="x-extend-api-version"),
     x_api_version: Optional[str] = Header(default=None, alias="x-api-version"),
@@ -486,21 +500,11 @@ async def require_key(
     - X-Tenant-ID header (required, 400 if missing)
     - x-extend-api-version or x-api-version header (optional, stored for tracking)
     """
-    # Extract Bearer token if present
-    bearer_token = None
-    if authorization and authorization.startswith("Bearer "):
-        bearer_token = authorization[7:]  # Strip "Bearer " prefix
+    _require_configured_static_api_key()
 
-    expected_api_key = _require_configured_static_api_key()
-
-    # Authenticate: Bearer token OR API key required
-    authenticated = False
-    if bearer_token:
-        if bearer_token == expected_api_key:
-            authenticated = True
-    elif x_api_key:
-        if x_api_key == expected_api_key:
-            authenticated = True
+    # Constant-time comparison. A Bearer token that does not match falls
+    # through to X-API-Key instead of shadowing it.
+    authenticated = _authenticated_static_credential(request) is not None
 
     if not authenticated:
         raise HTTPException(
@@ -515,8 +519,9 @@ async def require_key(
             detail={"code": "MISSING_TENANT", "message": "Missing X-Tenant-ID header"}
         )
 
-    # Enforce rate limiting
-    await _enforce_rate_limit(request, x_tenant_id)
+    # Enforce rate limiting (once: skipped when the middleware already counted)
+    if not getattr(request.state, "rate_limit_counted", False):
+        await _enforce_rate_limit(request, x_tenant_id)
 
     # Store context in request state
     request.state.tenant_id = x_tenant_id
@@ -530,6 +535,48 @@ async def require_key(
         "api_version": api_version
     }
 
+
+
+def _google_account_allowed(email: Optional[str]) -> bool:
+    """Allow-list for Google sign-in: GOOGLE_ALLOWED_EMAILS or GOOGLE_ALLOWED_DOMAINS.
+
+    With neither configured, sign-in is open outside production and closed in
+    production, so a verified Google account alone never grants access there.
+    """
+    emails = settings.google_allowed_emails()
+    domains = settings.google_allowed_domains()
+    if not emails and not domains:
+        return not _is_production_environment()
+    normalized = (email or "").strip().lower()
+    if not normalized or "@" not in normalized:
+        return False
+    return normalized in emails or normalized.rsplit("@", 1)[1] in domains
+
+
+def _resolve_local_input_path(input_path: str) -> str:
+    """Confine local path extraction to LOCAL_EXTRACT_BASE_DIR.
+
+    Reading server paths is a development convenience. It is refused unless a
+    base directory is configured (never in production), and the resolved path
+    must stay inside it, so ``..`` and symlinks cannot escape.
+    """
+    base = (settings.LOCAL_EXTRACT_BASE_DIR or "").strip()
+    if _is_production_environment() or not base:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "LOCAL_PATHS_DISABLED",
+                "message": "Server-side path extraction is disabled; upload files instead",
+            },
+        )
+    base_path = Path(base).expanduser().resolve()
+    candidate = Path(os.path.expanduser(input_path)).resolve()
+    if not candidate.is_relative_to(base_path):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"code": "PATH_NOT_ALLOWED", "message": "Input path is outside the allowed directory"},
+        )
+    return str(candidate)
 
 
 async def _run_extraction(
@@ -628,7 +675,9 @@ async def _maybe_send_webhook(job: JobRecord) -> None:
     }
 
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
+        # Re-check right before sending: DNS may have changed since the job was accepted.
+        await anyio.to_thread.run_sync(assert_public_https_url, str(job.webhook_url))
+        async with httpx.AsyncClient(timeout=10, follow_redirects=False) as client:
             await client.post(str(job.webhook_url), json=payload)
     except Exception as exc:  # pragma: no cover - network best effort
         job_logger = get_logger()
@@ -1264,7 +1313,6 @@ def build_api() -> FastAPI:
                     "description": "Error generating full schema"
                 },
                 "paths": {},
-                "error": str(e)
             }
 
     # Add middleware in correct order (LIFO - last added runs first)
@@ -1274,15 +1322,17 @@ def build_api() -> FastAPI:
     app.add_middleware(
         RateLimitMiddleware,
         rate_limit_store=rate_limit_store,
-        requests_per_minute=60,
+        requests_per_minute=settings.RATE_PER_MIN,
         requests_per_hour=1000,
         fail_closed=_is_production_environment(),
+        authenticate=_authenticated_static_credential,
     )
     app.add_middleware(
         IdempotencyMiddleware,
         idempotency_store=idempotency_store,
         ttl_seconds=settings.IDEMPOTENCY_TTL_S,
         fail_closed=_is_production_environment(),
+        authenticate=_authenticated_static_credential,
     )
     app.add_middleware(MetricsMiddleware)
     app.add_middleware(FileSizeMiddleware)
@@ -1293,9 +1343,19 @@ def build_api() -> FastAPI:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=origins,
-        allow_credentials=True,
+        # Authentication is header-based; no cookies, so no credentialed CORS.
+        allow_credentials=False,
         allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-        allow_headers=["Authorization", "Content-Type", "Idempotency-Key", "X-Request-ID", "X-API-Key", "X-Tenant-Id", "*"],
+        allow_headers=[
+            "Authorization",
+            "Content-Type",
+            "Idempotency-Key",
+            "X-Request-ID",
+            "X-API-Key",
+            "X-Tenant-Id",
+            "X-API-Version",
+            "X-Extend-API-Version",
+        ],
         expose_headers=["X-Request-ID"],
     )
 
@@ -1368,10 +1428,15 @@ def build_api() -> FastAPI:
         except Exception:
             return Response(status_code=502)
 
-    # Prometheus metrics endpoint (public)
+    # Prometheus metrics endpoint (requires the API key: labels include tenant IDs)
     @app.get("/metrics", tags=["observability"])
-    async def metrics():
-        """Expose Prometheus metrics."""
+    async def metrics(request: Request):
+        """Expose Prometheus metrics to authenticated callers."""
+        if _authenticated_static_credential(request) is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={"code": "UNAUTHORIZED", "message": "Invalid or missing authentication"},
+            )
         return await metrics_app()()
 
     # ==================== AUTHENTICATION ENDPOINTS ====================
@@ -1409,11 +1474,17 @@ def build_api() -> FastAPI:
         from app.auth.google_auth import GoogleAuthError, verify_google_token
 
         try:
-            verify_google_token(token, client_id=settings.GOOGLE_CLIENT_ID)
+            user_info = verify_google_token(token, client_id=settings.GOOGLE_CLIENT_ID)
         except GoogleAuthError:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail={"code": "INVALID_TOKEN", "message": "Google token verification failed"},
+            )
+
+        if not _google_account_allowed(user_info.email):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={"code": "ACCOUNT_NOT_ALLOWED", "message": "This account is not enabled for sign-in"},
             )
 
         return {"status": "ok"}
@@ -1476,6 +1547,10 @@ def build_api() -> FastAPI:
         try:
             from app.auth.google_auth import GoogleAuthError, verify_google_token
             user_info = verify_google_token(token, client_id=settings.GOOGLE_CLIENT_ID)
+
+            # Only allow-listed Google accounts may sign in (and be auto-created).
+            if not _google_account_allowed(user_info.email):
+                return None
 
             # Find user by email
             result = await session.execute(
@@ -3310,7 +3385,7 @@ def build_api() -> FastAPI:
         tenant_ctx: Dict[str, str] = Depends(require_key),
     ) -> ExtractResponse:
         """Extract usage data from files at the specified path."""
-        resolved = os.path.expanduser(payload.input_path)
+        resolved = _resolve_local_input_path(payload.input_path)
         if not os.path.exists(resolved):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -3370,6 +3445,16 @@ def build_api() -> FastAPI:
         tenant_ctx: Dict[str, str] = Depends(require_key),
     ) -> Dict[str, Any]:
         """Create a background job for processing."""
+        if not payload.is_cloud_path():
+            payload = payload.model_copy(update={"input_path": _resolve_local_input_path(payload.input_path)})
+        if payload.webhook_url is not None:
+            try:
+                await anyio.to_thread.run_sync(assert_public_https_url, str(payload.webhook_url))
+            except UnsafeOutboundURL as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail={"code": "WEBHOOK_URL_REJECTED", "message": str(exc)},
+                ) from exc
         job_store = getattr(request.app.state, "job_store", None)
         if job_store is None:
             raise HTTPException(

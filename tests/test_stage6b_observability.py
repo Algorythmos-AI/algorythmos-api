@@ -101,9 +101,10 @@ async def test_metrics_collect_vendor_and_run_counters(api_client, monkeypatch):
     health = await api_client.get("/vendor/healthz")
     assert health.status_code in (204, 502)
 
-    metrics = await api_client.get("/metrics")
+    metrics_headers = {"X-Api-Key": settings.ALG_API_KEY}
+    metrics = await api_client.get("/metrics", headers=metrics_headers)
     if metrics.status_code == 404:
-        metrics = await api_client.get("/api/metrics")
+        metrics = await api_client.get("/api/metrics", headers=metrics_headers)
     assert metrics.status_code == 200
     body = metrics.text
 

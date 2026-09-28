@@ -9,6 +9,10 @@ from pydantic import Field, AliasChoices, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+DEFAULT_WEBHOOK_SECRET = "test_secret_change_in_production"
+_LOCAL_ORIGIN_HOSTS = ("localhost", "127.0.0.1", "0.0.0.0", "[::1]")
+
+
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
     
@@ -35,9 +39,9 @@ class Settings(BaseSettings):
         description="Base API URL"
     )
     CORS_ORIGINS: str = Field(
-        default="*",
+        default="",
         validation_alias=AliasChoices("CORS_ORIGINS", "cors_origins"),
-        description="CORS allowed origins (comma-separated)"
+        description="CORS allowed origins (comma-separated). Empty means no browser origins."
     )
     ENV: str = Field(
         default="dev",
@@ -62,7 +66,8 @@ class Settings(BaseSettings):
     )
     REDIS_URL: str | None = Field(
         default=None,
-        validation_alias=AliasChoices("REDIS_URL", "redis_url"),
+        # KV_URL / UPSTASH_REDIS_URL: names used by managed Redis integrations.
+        validation_alias=AliasChoices("REDIS_URL", "redis_url", "KV_URL", "UPSTASH_REDIS_URL"),
         description="Redis URL used for distributed operational state (rate limiting, queue signalling)"
     )
     STATE_BACKEND: str = Field(
@@ -98,11 +103,21 @@ class Settings(BaseSettings):
         description="Time window for webhook timestamp validation in seconds"
     )
     WEBHOOK_SECRET: str = Field(
-        default="test_secret_change_in_production",
+        default=DEFAULT_WEBHOOK_SECRET,
         validation_alias=AliasChoices("WEBHOOK_SECRET", "webhook_secret"),
         description="Secret for webhook HMAC signature verification"
     )
     
+    # Server-side path extraction (development only; refused in production)
+    LOCAL_EXTRACT_BASE_DIR: str | None = Field(
+        default=None,
+        description="Directory that /extract/path and /jobs may read from. Unset disables the feature."
+    )
+
+    # Google sign-in allow-list (comma-separated). Empty: open outside production, closed in production.
+    GOOGLE_ALLOWED_DOMAINS: str = Field(default="", description="Email domains allowed to sign in with Google")
+    GOOGLE_ALLOWED_EMAILS: str = Field(default="", description="Individual emails allowed to sign in with Google")
+
     # Idempotency settings
     IDEMPOTENCY_TTL_S: int = Field(
         default=86400,  # 24 hours
@@ -178,6 +193,20 @@ class Settings(BaseSettings):
             )
         if env_normalized in {"prod", "production"} and self.STATE_BACKEND.strip().lower() == "memory":
             raise ValueError("STATE_BACKEND=memory is not allowed in production")
+        if env_normalized in {"prod", "production"}:
+            origins = self.get_cors_origins()
+            if "*" in origins:
+                raise ValueError("CORS_ORIGINS must list explicit origins in production, not '*'")
+            local = [o for o in origins if any(f"//{h}" in o for h in _LOCAL_ORIGIN_HOSTS)]
+            if local:
+                raise ValueError(f"CORS_ORIGINS must not include local development origins in production: {local}")
+            if self.WEBHOOK_SECRET == DEFAULT_WEBHOOK_SECRET:
+                raise ValueError("WEBHOOK_SECRET must be set to a real secret in production")
+            if self.LOCAL_EXTRACT_BASE_DIR:
+                raise ValueError("LOCAL_EXTRACT_BASE_DIR must not be set in production")
+            # Legacy vendor signatures stay off in production unless explicitly enabled.
+            if "WEBHOOK_ALLOW_LEGACY_SIGNATURES" not in self.model_fields_set:
+                self.WEBHOOK_ALLOW_LEGACY_SIGNATURES = False
         if self.PARSE_WORKER_MAX_ATTEMPTS < 1:
             raise ValueError("PARSE_WORKER_MAX_ATTEMPTS must be >= 1")
         if self.PARSE_WORKER_POLL_INTERVAL_S <= 0:
@@ -188,6 +217,12 @@ class Settings(BaseSettings):
             raise ValueError("PARSE_WORKER_LOCK_TIMEOUT_S must be > 0")
         return self
     
+    def google_allowed_domains(self) -> set[str]:
+        return {d.strip().lower().lstrip("@") for d in self.GOOGLE_ALLOWED_DOMAINS.split(",") if d.strip()}
+
+    def google_allowed_emails(self) -> set[str]:
+        return {e.strip().lower() for e in self.GOOGLE_ALLOWED_EMAILS.split(",") if e.strip()}
+
     def get_cors_origins(self) -> List[str]:
         """Parse CORS origins from the configuration."""
         if self.CORS_ORIGINS.strip() == "*":
