@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -110,7 +112,9 @@ async def test_protected_route_with_valid_auth_still_works(app_client):
             "X-API-Key": settings.ALG_API_KEY,
             "X-Tenant-ID": "tenant-auth-test",
         },
-        json={"input_path": "/definitely/missing/path"},
+        # Missing path inside the allowed base directory (see conftest), so the
+        # request passes auth and the path guard and fails on existence.
+        json={"input_path": os.path.join(os.environ["LOCAL_EXTRACT_BASE_DIR"], "definitely-missing-path")},
     )
 
     # Valid auth reaches business logic and fails on path validation, not auth.

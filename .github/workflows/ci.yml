@@ -105,7 +105,25 @@ jobs:
           ENV: prod
           REDIS_URL: redis://127.0.0.1:6379/0
           STATE_BACKEND: redis
+          WEBHOOK_SECRET: ci-prod-guard-secret
+          CORS_ORIGINS: https://app.algorythmos.com
         run: uv run --no-sync python -c "import config; print('prod config OK')"
+      - name: ENV=prod refuses unsafe CORS and the default webhook secret
+        env:
+          ENV: prod
+          REDIS_URL: redis://127.0.0.1:6379/0
+          STATE_BACKEND: redis
+        run: |
+          refuses() {
+            if env "$@" uv run --no-sync python -c "import config" 2>/dev/null; then
+              echo "::error::prod config accepted: $*"
+              exit 1
+            fi
+          }
+          refuses WEBHOOK_SECRET=ci-prod-guard-secret "CORS_ORIGINS=*"
+          refuses WEBHOOK_SECRET=ci-prod-guard-secret CORS_ORIGINS=http://localhost:3000
+          refuses CORS_ORIGINS=https://app.algorythmos.com
+          echo "unsafe prod settings correctly refused"
       - name: ENV=prod refuses to boot without a distributed state store
         env:
           ENV: prod

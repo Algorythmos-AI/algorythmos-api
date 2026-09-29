@@ -180,14 +180,14 @@ class TestUploadEndpoint:
 class TestPathEndpoint:
     """Test cases for the path extraction endpoint."""
 
-    def test_extract_path_not_found_error(self, client: TestClient, valid_api_key: str):
+    def test_extract_path_not_found_error(self, client: TestClient, valid_api_key: str, tmp_path: Path):
         """Test extracting from non-existent path returns 400."""
         headers = {
             "x-api-key": valid_api_key,
             "x-tenant-id": "test-tenant"
         }
         
-        payload = {"input_path": "/non/existent/path"}
+        payload = {"input_path": str(tmp_path / "non-existent")}
         response = client.post("/api/extract/path", headers=headers, json=payload)
         
         assert response.status_code == 400

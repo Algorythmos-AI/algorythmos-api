@@ -134,10 +134,17 @@ def build_idempotency_cache_key(
     idempotency_key: str,
     request_method: str,
     request_path: str,
+    principal: Optional[str] = None,
 ) -> str:
-    """Create a stable idempotency cache key including route scope."""
+    """Create a stable idempotency cache key including route and caller scope.
+
+    ``principal`` is a non-reversible fingerprint of the authenticated
+    credential, so a cached response is only ever replayed to the caller that
+    produced it.
+    """
     tenant_part = tenant_id or "anonymous"
-    return f"{tenant_part}:{request_method.upper()}:{request_path}:{idempotency_key}"
+    key = f"{tenant_part}:{request_method.upper()}:{request_path}:{idempotency_key}"
+    return f"{principal}:{key}" if principal else key
 
 
 @dataclass(frozen=True)
