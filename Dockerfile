@@ -18,7 +18,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 # copy only what we need to resolve and install
-COPY pyproject.toml README.md /app/
+COPY requirements.txt pyproject.toml README.md /app/
 COPY app.py config.py database.py models_api_key.py models_user.py /app/
 COPY alembic.ini /app/alembic.ini
 COPY app /app/app
@@ -33,7 +33,10 @@ RUN python -m venv /opt/venv
 ENV VIRTUAL_ENV=/opt/venv
 ENV PATH="/opt/venv/bin:${PATH}"
 RUN pip install --upgrade pip wheel
-RUN pip install --no-cache-dir .
+# Pinned runtime dependencies first (the same file Vercel installs), then the
+# package itself without re-resolving them, so the image matches production.
+RUN pip install --no-cache-dir -r requirements.txt \
+ && pip install --no-cache-dir --no-deps .
 
 ############################
 # Runtime
