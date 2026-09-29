@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+- Removed committed personal documents and a derived usage export from the tree and the
+  deploy bundle; test fixtures are now synthetic invoices generated at test time.
+- Removed scripts that embedded an API key; tests fall back to a dummy key only.
+- Bumped `python-multipart` to 0.0.31 and `anyio` to 4.14.2 (published advisories).
+- Tests no longer walk real directories such as `/tmp` on the machine running them.
+
+### Changed
+- CI rebuilt (`ci.yml`): pinned actions, read-only token, Python 3.12 to match the Vercel
+  runtime, bug-class lint gate, single Alembic head, Redis integration, a production-guard
+  check, Docker smoke. The org secret scan and `pip-audit` run in `security.yml`.
+- Test toolchain pinned in `dev-requirements.txt`; `respx` moved out of runtime requirements.
+- `pytest.ini` enables pytest-asyncio auto mode and registers the `integration` marker.
+- Tests already failing on `main` are listed in `tests/known_failures.txt` and run as
+  non-strict xfail; the list may only shrink.
+- Added Dependabot, `SECURITY.md`, a PR template and a working pre-commit configuration.
+
 ### Added
 - **Database Persistence**: SQLAlchemy async with PostgreSQL/SQLite support
   - Run tracking with full lifecycle management

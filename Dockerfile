@@ -1,6 +1,6 @@
 # Override this at build time if Docker Hub TLS is flaky:
-#   --build-arg PY_BASE=mirror.gcr.io/library/python:3.11-slim
-ARG PY_BASE=python:3.11-slim
+#   --build-arg PY_BASE=mirror.gcr.io/library/python:3.12-slim
+ARG PY_BASE=python:3.12-slim
 
 ############################
 # Builder

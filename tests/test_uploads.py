@@ -19,7 +19,7 @@ def client() -> Generator[TestClient, None, None]:
 @pytest.fixture
 def valid_api_key() -> str:
     """Get valid API key from environment or use default."""
-    return os.getenv("ALG_API_KEY") or os.getenv("API_KEY", "algo_dWukMWn8YyFfkdnL4yITRgp8042vYbz1ckk2aY3dv")
+    return os.getenv("ALG_API_KEY") or os.getenv("API_KEY", "local_dummy")
 
 
 @pytest.fixture
@@ -199,7 +199,7 @@ class TestPathEndpoint:
 class TestJobEndpoints:
     """Test cases for job-related endpoints."""
 
-    def test_create_job_success(self, client: TestClient, valid_api_key: str):
+    def test_create_job_success(self, client: TestClient, valid_api_key: str, tmp_path: Path):
         """Test creating a background job."""
         headers = {
             "x-api-key": valid_api_key,
@@ -207,7 +207,7 @@ class TestJobEndpoints:
         }
         
         payload = {
-            "input_path": "/tmp",  # Use a path that likely exists
+            "input_path": str(tmp_path),  # an empty directory the test owns
             "debug": False
         }
         response = client.post("/api/jobs", headers=headers, json=payload)
@@ -248,7 +248,9 @@ class TestRateLimiting:
         # Note: This test depends on the rate limit configuration
         responses = []
         for i in range(5):
-            payload = {"input_path": "/tmp"}
+            # A path that does not exist: the test only needs a routed request,
+            # never a real directory walk on the machine running the tests.
+            payload = {"input_path": "/nonexistent-rate-limit-probe"}
             response = client.post("/api/extract/path", headers=headers, json=payload)
             responses.append(response.status_code)
         

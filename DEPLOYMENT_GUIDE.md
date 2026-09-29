@@ -300,7 +300,7 @@ curl https://api-algorythmos.vercel.app/api/alg/healthz
 
 # Test with API key
 curl https://api-algorythmos.vercel.app/api/alg/version \
-  -H "X-Api-Key: your-api-key" \
+  -H "X-Api-Key: $ALG_API_KEY" \
   -H "X-Tenant-Id: test"
 ```
 

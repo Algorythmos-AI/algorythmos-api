@@ -1,0 +1,145 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  merge_group:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  PYTHON_VERSION: "3.12"
+  ALG_API_KEY: ci-test-key
+  GOOGLE_CLIENT_ID: ci-test.apps.googleusercontent.com
+  VENDOR_WEBHOOK_SECRET: ci-test-secret
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: astral-sh/setup-uv@e92bafb6253dcd438e0484186d7669ea7a8ca1cc # v6.4.3
+      - name: Install ruff (pinned in dev-requirements.txt)
+        run: uv tool install "$(grep '^ruff==' dev-requirements.txt)"
+      - name: Bug-class rules (blocking)
+        run: ruff check . --select E9,F63,F7,F82,PLE --output-format github
+      - name: Full rule set (report only, existing debt)
+        continue-on-error: true
+        run: ruff check . --statistics
+
+  test:
+    name: Tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - uses: astral-sh/setup-uv@e92bafb6253dcd438e0484186d7669ea7a8ca1cc # v6.4.3
+      - name: Install dependencies
+        run: |
+          uv venv
+          uv pip install -r requirements.txt -r dev-requirements.txt
+      - name: Exactly one Alembic head
+        run: |
+          heads=$(uv run --no-sync python -m alembic heads | grep -c "(head)")
+          echo "Alembic heads: $heads"
+          test "$heads" -eq 1
+      - name: Run tests (tests/known_failures.txt run as non-strict xfail)
+        run: uv run --no-sync python -m pytest tests/ --timeout=120
+
+  redis-integration:
+    name: Redis integration
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - uses: astral-sh/setup-uv@e92bafb6253dcd438e0484186d7669ea7a8ca1cc # v6.4.3
+      - name: Install dependencies
+        run: |
+          uv venv
+          uv pip install -r requirements.txt -r dev-requirements.txt
+      - name: Run Redis integration tests
+        env:
+          REDIS_URL: redis://127.0.0.1:6379/0
+        run: uv run --no-sync python -m pytest -m integration tests/test_phase2_redis_integration.py --timeout=60
+
+  prod-guard:
+    name: Production guard
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - uses: astral-sh/setup-uv@e92bafb6253dcd438e0484186d7669ea7a8ca1cc # v6.4.3
+      - name: Install dependencies
+        run: |
+          uv venv
+          uv pip install -r requirements.txt
+      - name: ENV=prod boots when its requirements are set
+        env:
+          ENV: prod
+          REDIS_URL: redis://127.0.0.1:6379/0
+          STATE_BACKEND: redis
+        run: uv run --no-sync python -c "import config; print('prod config OK')"
+      - name: ENV=prod refuses to boot without a distributed state store
+        env:
+          ENV: prod
+        run: |
+          if uv run --no-sync python -c "import config" 2>/dev/null; then
+            echo "::error::config imported in prod without REDIS_URL; the fail-fast guard is broken"
+            exit 1
+          fi
+          echo "prod config correctly refused"
+
+  docker-smoke:
+    name: Docker smoke
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Build image
+        run: docker build -t api-algorythmos:ci .
+      - name: Container answers its health check
+        run: |
+          docker run -d --name api-smoke -p 8080:8080 \
+            -e ALG_API_KEY=ci-smoke-key \
+            -e GOOGLE_CLIENT_ID=ci-smoke.apps.googleusercontent.com \
+            -e VENDOR_WEBHOOK_SECRET=ci-smoke-secret \
+            api-algorythmos:ci
+          trap 'docker rm -f api-smoke >/dev/null 2>&1 || true' EXIT
+          for _ in $(seq 1 40); do
+            for path in /alg/healthz /api/alg/healthz; do
+              if [ "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:8080${path}")" = "200" ]; then
+                echo "healthy at ${path}"
+                exit 0
+              fi
+            done
+            sleep 2
+          done
+          docker logs api-smoke
+          exit 1

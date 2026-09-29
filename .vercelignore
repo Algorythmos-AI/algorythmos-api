@@ -13,10 +13,14 @@ Makefile
 # Documentation
 README.md
 
-# Data files that aren't needed at runtime  
+# Data files that aren't needed at runtime
 files/
-orange_internet_usage.csv
-extract_orange_internet.py
+*.pdf
+*.csv
+*.patch
+.tools/
+frontend/
+docs/
 
 # Build artifacts
 .venv/

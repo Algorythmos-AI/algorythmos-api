@@ -8,7 +8,7 @@ import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
 from uuid import uuid4
 
 import anyio
@@ -37,6 +37,9 @@ from vendor_libs.services import vendor
 from vendor_libs.utils.security import parse_signature_header, verify_hmac_sha256
 from vendor_libs.utils.observability import metrics_app, runs_started, runs_succeeded, runs_failed
 from prometheus_client import Counter, Histogram
+
+if TYPE_CHECKING:  # annotation-only import; the runtime import stays inside the handlers
+    from models_user import UserDB
 
 # Production middleware imports
 from document_processing.middleware import RateLimitMiddleware, IdempotencyMiddleware
