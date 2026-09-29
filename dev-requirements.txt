@@ -1,6 +1,6 @@
 # Test and lint toolchain, pinned so local runs and CI behave the same.
 # Install after requirements.txt:  uv pip install -r requirements.txt -r dev-requirements.txt
-pytest==8.4.2
+pytest==9.1.1
 pytest-asyncio==1.4.0
 pytest-timeout==2.4.0
 pytest-cov==7.1.0
