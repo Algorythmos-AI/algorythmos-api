@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Security
+- **Production build guard.** A production build fails unless `ENV=prod` and the
+  settings pass the production validator, so a misconfigured deploy is never
+  promoted and the previous one keeps serving. Settings validation errors no longer
+  echo their input, which contained every secret. See
+  `docs/runbooks/production-mode.md`.
 - **Data retention.** Documents and derived data are removed 30 days after creation,
   soft-deleted rows 7 days after deletion, expired idempotency and replay rows once
   expired (`docs/DATA-RETENTION.md`). A daily Vercel Cron calls
@@ -64,6 +69,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `pytest.ini` enables pytest-asyncio auto mode and registers the `integration` marker.
 - Tests already failing on `main` are listed in `tests/known_failures.txt` and run as
   non-strict xfail; the list may only shrink.
+- The test suite creates every table once per run, so a fresh checkout no longer fails
+  by test order. It refuses a non-SQLite `DATABASE_URL`, since its fixtures drop and
+  recreate tables. The CI Postgres job passes `DATABASE_URL` to the migration step only.
 - Added Dependabot, `SECURITY.md`, a PR template and a working pre-commit configuration.
 
 ### Added

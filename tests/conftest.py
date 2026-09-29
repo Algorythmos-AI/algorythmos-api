@@ -60,6 +60,39 @@ except (ImportError, ModuleNotFoundError):
     RunStore = None
     ReplaySet = None
 
+
+def _prepare_test_database() -> None:
+    """Create every ORM table once per run, on SQLite only.
+
+    Several tests use tables that only other test modules created, so a fresh
+    checkout (as in CI) failed or passed depending on test order. reset_state
+    also drops and recreates `runs`, so the suite refuses any database but
+    SQLite: it must never run against whatever DATABASE_URL points at.
+    """
+    from sqlalchemy import create_engine
+
+    from database import Base
+
+    backend = engine.url.get_backend_name()
+    if backend != "sqlite":
+        pytest.exit(
+            f"tests/conftest.py drops and recreates tables, so it refuses a {backend} "
+            "DATABASE_URL. Unset DATABASE_URL to use SQLite; Postgres checks read "
+            "RETENTION_TEST_DATABASE_URL instead.",
+            returncode=4,
+        )
+    for module in ("models_user", "models_api_key", "app.models", "document_processing.models"):
+        importlib.import_module(module)
+    sync_engine = create_engine(engine.url.set(drivername="sqlite"))
+    try:
+        Base.metadata.create_all(sync_engine)
+    finally:
+        sync_engine.dispose()
+
+
+if engine is not None:
+    _prepare_test_database()
+
 TEST_VENDOR_BASE = "https://vendor.test"
 
 settings.ALG_API_KEY = os.environ["ALG_API_KEY"]
