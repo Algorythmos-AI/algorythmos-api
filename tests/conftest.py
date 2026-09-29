@@ -25,6 +25,10 @@ os.environ.setdefault("NO_NETWORK", "1")
 # tmp dirs live under it); unset in deployed environments, so the feature is off.
 import tempfile  # noqa: E402
 
+# The legacy suite calls with the static key under many tenant names. "*" lets
+# the static key act for any tenant; production refuses it. Tenant binding
+# itself is covered strictly in tests/test_tenant_binding.py.
+os.environ.setdefault("ALG_STATIC_KEY_ALLOWED_TENANTS", "*")
 # Tests exercise CORS from a local dev origin; production refuses local origins.
 os.environ.setdefault("CORS_ORIGINS", "http://localhost:3000")
 os.environ.setdefault("LOCAL_EXTRACT_BASE_DIR", str(Path(tempfile.gettempdir()).resolve()))

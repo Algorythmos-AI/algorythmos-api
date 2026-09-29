@@ -104,7 +104,10 @@ from document_processing.services import processor_service
 from document_processing.services import workflow_service
 from document_processing.services import evaluation_service
 from core.config import build_error_response, build_pagination_meta
-from core.security import UnsafeOutboundURL, assert_public_https_url, matching_static_credential
+from core.principals import API_KEY_PREFIX, user_and_tenant_from_api_key, user_from_google_token
+from core.principals import hash_api_key as core_hash_api_key
+from core.security import UnsafeOutboundURL, assert_public_https_url, bearer_token, matching_static_credential
+from core.tenancy import TenantMismatch, TenantUnresolved, bound_tenant, static_key_tenant, static_key_tenant_or_none
 
 # Database imports - use direct module references to avoid package conflicts
 from sqlalchemy import select, and_, func
@@ -483,6 +486,19 @@ def _authenticated_static_credential(request: Request) -> Optional[str]:
     return matching_static_credential(request, settings.ALG_API_KEY)
 
 
+async def _db_session():
+    """Request-scoped DB session; resolves the factory set by build_api at call time."""
+    async for session in get_session():
+        yield session
+
+
+def _static_key_bound_tenant(request: Request) -> Optional[str]:
+    """Tenant a static-key request acts for, or None if it is not one the route will accept."""
+    if _authenticated_static_credential(request) is None:
+        return None
+    return static_key_tenant_or_none(settings, request.headers.get("x-tenant-id"))
+
+
 async def require_key(
     request: Request,
     x_api_key: Optional[str] = Security(_api_key_scheme),
@@ -490,51 +506,75 @@ async def require_key(
     x_tenant_id: Optional[str] = Header(default=None, alias="x-tenant-id"),
     x_extend_api_version: Optional[str] = Header(default=None, alias="x-extend-api-version"),
     x_api_version: Optional[str] = Header(default=None, alias="x-api-version"),
+    session=Depends(_db_session),
 ) -> Dict[str, str]:
     """
-    Validate authentication and extract tenant context.
+    Authenticate the caller and bind the request to the caller's tenant.
 
-    Supports:
-    - X-API-Key header (legacy)
-    - Authorization: Bearer <token> header (Extend parity)
-    - X-Tenant-ID header (required, 400 if missing)
-    - x-extend-api-version or x-api-version header (optional, stored for tracking)
+    Accepted credentials, in order:
+    - the static API key (X-API-Key or Authorization: Bearer), acting for ALG_TENANT_ID
+    - a per-user ``alg_`` key (X-API-Key or Bearer), acting for the key's tenant
+    - a Google ID token (Bearer) for an allow-listed account, acting for the user's tenant
+
+    X-Tenant-ID is optional: when present it must equal the bound tenant (403
+    otherwise). x-extend-api-version / x-api-version are stored for tracking.
     """
     _require_configured_static_api_key()
 
-    # Constant-time comparison. A Bearer token that does not match falls
-    # through to X-API-Key instead of shadowing it.
-    authenticated = _authenticated_static_credential(request) is not None
-
-    if not authenticated:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail={"code": "UNAUTHORIZED", "message": "Invalid or missing authentication"}
-        )
-
-    # Require X-Tenant-ID header
-    if not x_tenant_id:
+    try:
+        if _authenticated_static_credential(request) is not None:
+            tenant = static_key_tenant(settings, x_tenant_id)
+            principal_kind = "static"
+        else:
+            tenant, principal_kind = await _per_user_tenant(request, session, x_tenant_id)
+    except TenantUnresolved:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"code": "MISSING_TENANT", "message": "Missing X-Tenant-ID header"}
+            detail={"code": "MISSING_TENANT", "message": "Missing X-Tenant-ID header"},
+        )
+    except TenantMismatch:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"code": "TENANT_MISMATCH", "message": "This credential cannot act for the requested tenant"},
         )
 
     # Enforce rate limiting (once: skipped when the middleware already counted)
     if not getattr(request.state, "rate_limit_counted", False):
-        await _enforce_rate_limit(request, x_tenant_id)
+        await _enforce_rate_limit(request, tenant)
 
-    # Store context in request state
-    request.state.tenant_id = x_tenant_id
+    request.state.tenant_id = tenant
+    request.state.principal_kind = principal_kind
 
     # Determine API version (prefer x-extend-api-version, fallback to x-api-version)
     api_version = x_extend_api_version or x_api_version or "2025-04-21"  # Default version
     request.state.api_version = api_version
 
     return {
-        "tenant": x_tenant_id,
+        "tenant": tenant,
         "api_version": api_version
     }
 
+
+async def _per_user_tenant(request: Request, session, requested: Optional[str]) -> tuple[str, str]:
+    """Resolve an ``alg_`` key or Google token to its bound tenant; 401 if neither authenticates."""
+    token = bearer_token(request.headers.get("authorization"))
+    header_key = request.headers.get("x-api-key")
+    for candidate in (header_key, token):
+        if candidate and candidate.startswith(API_KEY_PREFIX):
+            resolved = await user_and_tenant_from_api_key(candidate, session, settings)
+            if resolved is not None:
+                return bound_tenant(resolved[1], requested), "api_key"
+
+    if token and not token.startswith(API_KEY_PREFIX):
+        user = await user_from_google_token(token, session, settings, _google_account_allowed)
+        if user is not None:
+            request.state.user = user
+            return bound_tenant(user.tenant_id, requested), "google"
+
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail={"code": "UNAUTHORIZED", "message": "Invalid or missing authentication"},
+    )
 
 
 def _google_account_allowed(email: Optional[str]) -> bool:
@@ -1326,6 +1366,7 @@ def build_api() -> FastAPI:
         requests_per_hour=1000,
         fail_closed=_is_production_environment(),
         authenticate=_authenticated_static_credential,
+        resolve_tenant=_static_key_bound_tenant,
     )
     app.add_middleware(
         IdempotencyMiddleware,
@@ -1333,6 +1374,7 @@ def build_api() -> FastAPI:
         ttl_seconds=settings.IDEMPOTENCY_TTL_S,
         fail_closed=_is_production_environment(),
         authenticate=_authenticated_static_credential,
+        resolve_tenant=_static_key_bound_tenant,
     )
     app.add_middleware(MetricsMiddleware)
     app.add_middleware(FileSizeMiddleware)
@@ -1508,119 +1550,30 @@ def build_api() -> FastAPI:
         random_part = secrets.token_urlsafe(32)
         raw_key = f"{API_KEY_PREFIX}{random_part}"
 
-        # Hash the key with SHA-256
-        key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
+        # Hash the key with SHA-256 (same function used for lookup)
+        key_hash = core_hash_api_key(raw_key)
 
         # Prefix for display (alg_ + first 8 chars of random part)
         prefix = f"{API_KEY_PREFIX}{random_part[:8]}"
 
         return raw_key, key_hash, prefix
 
-    def hash_api_key(raw_key: str) -> str:
-        """Hash an API key for lookup."""
-        return hashlib.sha256(raw_key.encode()).hexdigest()
-
     async def get_current_user_from_token(
         authorization: Optional[str],
         session: AsyncSession,
     ) -> Optional["UserDB"]:
-        """
-        Verify Google ID token and return the associated user.
-        Returns None if token is invalid or user not found.
-        """
-        if not authorization or not authorization.startswith("Bearer "):
-            return None
-
-        token = authorization[7:].strip()
-        if not token:
-            return None
-
-        # Import UserDB model
-        from models_user import UserDB
-
-        # For now, simplified: look up user by a query
-        # In production, verify Google token and extract email/sub
-        # Then look up user by provider_account_id or email
-
-        # Since we don't have full Google verification here,
-        # we'll need to verify the token using google-auth
-        try:
-            from app.auth.google_auth import GoogleAuthError, verify_google_token
-            user_info = verify_google_token(token, client_id=settings.GOOGLE_CLIENT_ID)
-
-            # Only allow-listed Google accounts may sign in (and be auto-created).
-            if not _google_account_allowed(user_info.email):
-                return None
-
-            # Find user by email
-            result = await session.execute(
-                select(UserDB).where(
-                    UserDB.email == user_info.email,
-                    UserDB.is_active == True
-                )
-            )
-            user = result.scalar_one_or_none()
-
-            if not user:
-                # Create user if not exists (first login)
-                user = UserDB(
-                    id=str(uuid4()),
-                    email=user_info.email,
-                    display_name=user_info.name,
-                    avatar_url=user_info.picture,
-                    provider="google",
-                    provider_account_id=user_info.sub,
-                )
-                session.add(user)
-                await session.commit()
-                await session.refresh(user)
-
-            return user
-        except GoogleAuthError:
-            return None
-        except Exception:
-            return None
+        """Verify a Google ID token and return the allow-listed user (created on first sign-in)."""
+        return await user_from_google_token(
+            bearer_token(authorization), session, settings, _google_account_allowed
+        )
 
     async def get_user_from_api_key(
         api_key: str,
         session: AsyncSession,
     ) -> Optional["UserDB"]:
-        """
-        Look up user by API key.
-        Updates last_used_at timestamp on successful lookup.
-        """
-        if not api_key or not api_key.startswith(API_KEY_PREFIX):
-            return None
-
-        from models_api_key import ApiKeyDB
-        from models_user import UserDB
-
-        key_hash = hash_api_key(api_key)
-
-        # Find the API key
-        result = await session.execute(
-            select(ApiKeyDB).where(
-                ApiKeyDB.key_hash == key_hash,
-                ApiKeyDB.is_active == True
-            )
-        )
-        api_key_record = result.scalar_one_or_none()
-
-        if not api_key_record:
-            return None
-
-        # Update last_used_at
-        api_key_record.last_used_at = datetime.now(timezone.utc)
-        await session.commit()
-
-        # Get the associated user
-        result = await session.execute(
-            select(UserDB).where(
-                UserDB.id == api_key_record.user_id,
-                UserDB.is_active == True
-            )
-        )
-        return result.scalar_one_or_none()
+        """Look up the active user behind an ``alg_`` key (updates last_used_at)."""
+        resolved = await user_and_tenant_from_api_key(api_key, session, settings)
+        return resolved[0] if resolved else None
 
     async def require_authenticated_user(
         request: Request,
@@ -1658,7 +1611,8 @@ def build_api() -> FastAPI:
 
         # Store user in request state for downstream use
         request.state.user = user
-        request.state.tenant_id = user.email.split("@")[-1] if user.email else "default"
+        # The user's own tenant, never one derived from a shared email domain.
+        request.state.tenant_id = user.tenant_id
 
         return user
 
@@ -1712,6 +1666,7 @@ def build_api() -> FastAPI:
             name=payload.name,
             key_hash=key_hash,
             prefix=prefix,
+            tenant_id=user.tenant_id,  # the key acts for its creator's tenant
         )
         session.add(api_key)
         await session.commit()

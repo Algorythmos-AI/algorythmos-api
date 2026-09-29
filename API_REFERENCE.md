@@ -11,25 +11,34 @@ Local:      http://localhost:8080/api
 
 ## Authentication
 
-All endpoints (except health checks) require authentication via API key.
+All endpoints (except health checks) require one of these credentials, sent as
+`X-Api-Key: <credential>` or `Authorization: Bearer <credential>`:
+
+| Credential | Acts for tenant |
+|------------|-----------------|
+| The service API key | `ALG_TENANT_ID` (plus any tenants in `ALG_STATIC_KEY_ALLOWED_TENANTS`, deprecated) |
+| A personal `alg_...` key (created at `POST /auth/keys`) | The tenant of the user who created it |
+| A Google ID token (Bearer only), for an allow-listed account | The user's tenant: `GOOGLE_TENANT_MAP` for mapped domains, otherwise a tenant of their own |
 
 ### Headers
 
 | Header | Required | Description |
 |--------|----------|-------------|
-| `X-Api-Key` | Yes* | API key for authentication |
-| `X-Tenant-Id` | Yes* | Tenant identifier for multi-tenancy |
-| `Idempotency-Key` | No | Unique key to prevent duplicate processing |
+| `X-Api-Key` | Yes* | Credential (or use `Authorization: Bearer`) |
+| `X-Tenant-Id` | No | Optional. If sent, it must equal the credential's tenant, otherwise `403 TENANT_MISMATCH`. If omitted, the credential's tenant is used |
+| `Idempotency-Key` | No | Unique key to prevent duplicate processing (scoped to the caller) |
 | `X-Request-ID` | No | Custom request ID (auto-generated if not provided) |
 
 *Not required for public health endpoints
+
+`400 MISSING_TENANT` means no tenant could be determined (the service key with no
+`ALG_TENANT_ID` configured and no header).
 
 ### Example
 
 ```bash
 curl -H "X-Api-Key: $ALG_API_KEY" \
-     -H "X-Tenant-Id: tenant-123" \
-     https://api.algorythmos.com/api/alg/healthz
+     https://api.algorythmos.fr/api/schemas
 ```
 
 ---

@@ -22,6 +22,8 @@ from document_processing import models as doc_models
 
 # Import user model to register it with Base
 from models_user import UserDB
+# Import API key model so its table is part of target_metadata
+from models_api_key import ApiKeyDB  # noqa: E402,F401
 
 config = context.config
 

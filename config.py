@@ -118,6 +118,16 @@ class Settings(BaseSettings):
     GOOGLE_ALLOWED_DOMAINS: str = Field(default="", description="Email domains allowed to sign in with Google")
     GOOGLE_ALLOWED_EMAILS: str = Field(default="", description="Individual emails allowed to sign in with Google")
 
+    # Tenant binding (core/tenancy.py). The static key acts for ALG_TENANT_ID;
+    # this deprecated list lets it act for a few more. "*" (any tenant) is for
+    # local development and tests only and is refused in production.
+    ALG_STATIC_KEY_ALLOWED_TENANTS: str = Field(
+        default="", description="Extra tenants the static key may act for (comma-separated, deprecated)"
+    )
+    # Google users: "domain=tenant,..." puts a domain's users in one tenant;
+    # everyone else gets a tenant of their own.
+    GOOGLE_TENANT_MAP: str = Field(default="", description="Email domain to tenant mapping for Google users")
+
     # Idempotency settings
     IDEMPOTENCY_TTL_S: int = Field(
         default=86400,  # 24 hours
@@ -204,6 +214,10 @@ class Settings(BaseSettings):
                 raise ValueError("WEBHOOK_SECRET must be set to a real secret in production")
             if self.LOCAL_EXTRACT_BASE_DIR:
                 raise ValueError("LOCAL_EXTRACT_BASE_DIR must not be set in production")
+            if not (self.ALG_TENANT_ID or "").strip():
+                raise ValueError("ALG_TENANT_ID is required in production: it is the tenant the static key acts for")
+            if "*" in {t.strip() for t in self.ALG_STATIC_KEY_ALLOWED_TENANTS.split(",")}:
+                raise ValueError("ALG_STATIC_KEY_ALLOWED_TENANTS must not contain '*' in production")
             # Legacy vendor signatures stay off in production unless explicitly enabled.
             if "WEBHOOK_ALLOW_LEGACY_SIGNATURES" not in self.model_fields_set:
                 self.WEBHOOK_ALLOW_LEGACY_SIGNATURES = False

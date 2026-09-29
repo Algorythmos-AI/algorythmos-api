@@ -44,6 +44,8 @@ class UserDB(Base):
     provider = Column(String(50), nullable=False, default="google")  # Auth provider
     provider_account_id = Column(String(255), nullable=True, index=True)  # Google 'sub' claim
     is_active = Column(Boolean, nullable=False, default=True, index=True)
+    # Tenant this user acts for; assigned on first sign-in (core/tenancy.py).
+    tenant_id = Column(String(255), nullable=True, index=True)
     
     # Timestamps
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())

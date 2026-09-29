@@ -105,6 +105,7 @@ jobs:
           ENV: prod
           REDIS_URL: redis://127.0.0.1:6379/0
           STATE_BACKEND: redis
+          ALG_TENANT_ID: ci-tenant
           WEBHOOK_SECRET: ci-prod-guard-secret
           CORS_ORIGINS: https://app.algorythmos.com
         run: uv run --no-sync python -c "import config; print('prod config OK')"
@@ -113,6 +114,7 @@ jobs:
           ENV: prod
           REDIS_URL: redis://127.0.0.1:6379/0
           STATE_BACKEND: redis
+          ALG_TENANT_ID: ci-tenant
         run: |
           refuses() {
             if env "$@" uv run --no-sync python -c "import config" 2>/dev/null; then
@@ -123,6 +125,8 @@ jobs:
           refuses WEBHOOK_SECRET=ci-prod-guard-secret "CORS_ORIGINS=*"
           refuses WEBHOOK_SECRET=ci-prod-guard-secret CORS_ORIGINS=http://localhost:3000
           refuses CORS_ORIGINS=https://app.algorythmos.com
+          refuses WEBHOOK_SECRET=ci-prod-guard-secret CORS_ORIGINS=https://app.algorythmos.com "ALG_STATIC_KEY_ALLOWED_TENANTS=*"
+          refuses WEBHOOK_SECRET=ci-prod-guard-secret CORS_ORIGINS=https://app.algorythmos.com ALG_TENANT_ID=
           echo "unsafe prod settings correctly refused"
       - name: ENV=prod refuses to boot without a distributed state store
         env:
