@@ -55,6 +55,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Tests no longer walk real directories such as `/tmp` on the machine running them.
 
 ### Changed
+- The Redis rate-limit store closes its client with `aclose()`; `close()` is deprecated in redis-py.
 - `/frontend`: Next.js 16 and ESLint 10. ESLint config moved to the flat `eslint.config.mjs` (ESLint 10 no longer reads `.eslintrc`); `next lint`, removed in Next.js 16, is replaced by `eslint app components lib`. The new `react-hooks/set-state-in-effect` rule is off until the pages' mount-time data loading is refactored.
 - CI rebuilt (`ci.yml`): pinned actions, read-only token, Python 3.12 to match the Vercel
   runtime, bug-class lint gate, single Alembic head, Redis integration, a production-guard

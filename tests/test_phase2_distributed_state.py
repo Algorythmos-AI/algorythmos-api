@@ -15,7 +15,7 @@ from database import Base
 from document_processing.models import FileDB, IdempotencyKeyDB, ParserRunDB, ParserRunJobDB
 from document_processing.schemas import ParseResult, ParserRunStatus
 from document_processing.services import parser_service
-from document_processing.state import SQLIdempotencyStore
+from document_processing.state import RedisRateLimitStore, SQLIdempotencyStore
 from document_processing.workers import parse_worker
 
 
@@ -408,3 +408,26 @@ async def test_parse_sync_endpoint_does_not_enqueue_async_job(app_client, auth_h
     data = response.json()
     assert data["run_id"] == "run_phase2_sync"
     assert data["status"] == "completed"
+
+
+async def test_redis_rate_limit_store_close_uses_aclose_once():
+    """close() uses aclose() (close() is deprecated in redis-py) and is safe to repeat."""
+
+    class _Client:
+        def __init__(self):
+            self.calls = []
+
+        async def aclose(self):
+            self.calls.append("aclose")
+
+        async def close(self):  # pragma: no cover - must not be called
+            self.calls.append("close")
+
+    store = RedisRateLimitStore("redis://127.0.0.1:6379/0")
+    client = _Client()
+    store._client = client
+
+    await store.close()
+    await store.close()
+
+    assert client.calls == ["aclose"]

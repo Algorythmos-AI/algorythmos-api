@@ -126,7 +126,9 @@ class RedisRateLimitStore:
 
     async def close(self) -> None:
         if self._client is not None:
-            await self._client.close()
+            # aclose() replaces close(), deprecated since redis-py 5.0.1.
+            await self._client.aclose()
+            self._client = None
 
 
 def build_idempotency_cache_key(
